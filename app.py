@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import json
 import numpy as np
@@ -11,6 +11,7 @@ from llm_client import LLMClient
 
 st.set_page_config(page_title="Device Passport", layout="wide")
 
+# --- UTILS ---
 def render_clean(data):
     if isinstance(data, str):
         try: data = json.loads(data)
@@ -21,7 +22,7 @@ def render_clean(data):
             items = []
             for k,v in data.items():
                 if not isinstance(v, (list,dict)):
-                    items.append({"Parameter": k.replace("_"," ").title(), "Status": v})
+                    items.append({"Parameter": k.replace('_',' ').title(), "Status": v})
             if items:
                 st.table(pd.DataFrame(items))
     elif isinstance(data, list):
@@ -40,18 +41,20 @@ def find_signal_events(data):
     }
 
 def show_device_dashboard(role_name):
-    st.title(f"🎛️ {role_name} Console v7.0 (Stable)")
+    st.title(f"🎛️ {role_name} Console v8.0 (Final)")
     
+    # --- DB PROTECTION ---
     try: devices = list_devices()
     except Exception: st.error("Database connection failed."); st.stop()
     if not devices: st.warning("Database empty."); st.stop()
 
-    dev_map = {d["device_id"]: d for d in devices}
+    dev_map = {d['device_id']: d for d in devices}
     sel_id = st.selectbox("Select Asset ID", list(dev_map.keys()))
     payload = get_device_payload(sel_id)
     brand = payload.get("brand", "OEM")
     model = payload.get("model", "Hardware")
     
+    # --- TABS ---
     tabs = st.tabs(["📋 Specs", "⚖️ Tribunal", "📈 Spectral", "🧠 Lifecycle", "🔒 Audit"])
 
     with tabs[0]: 
@@ -59,6 +62,7 @@ def show_device_dashboard(role_name):
         with c1: st.subheader("Sanitization Specs"); render_clean(payload.get("gdpr_flags"))
         with c2: st.subheader("Functional Grading"); render_clean(payload.get("r2v3_flags"))
 
+    # --- TAB 1: AGENTIC TRIBUNAL ---
     with tabs[1]: 
         st.subheader("Multi-Agent Adversarial Audit")
         st.info(f"Subject: {brand} {model}")
@@ -68,6 +72,7 @@ def show_device_dashboard(role_name):
             rid = f"RUN-{pd.Timestamp.now().strftime('%H%M%S')}"
             persist_run(rid, sel_id)
 
+            # AGENT A: PROSECUTOR
             with st.chat_message("user", avatar="🛑"):
                 st.write("**Agent A (Risk Auditor):**")
                 p1 = f"Act as Risk Auditor. Review {brand} {model}. Data: {payload}. Find strictly negative faults. Be aggressive."
@@ -75,6 +80,7 @@ def show_device_dashboard(role_name):
                 st.write(r1)
                 persist_audit_log(rid, "PROSECUTOR", {"text": r1})
 
+            # AGENT B: DEFENDER
             with st.chat_message("assistant", avatar="🛡️"):
                 st.write("**Agent B (Value Recovery):**")
                 p2 = f"Act as Value Recovery. Defend {brand} {model}. Counter-argue: {r1}. Find value in parts."
@@ -82,6 +88,7 @@ def show_device_dashboard(role_name):
                 st.write(r2)
                 persist_audit_log(rid, "DEFENDER", {"text": r2})
 
+            # ARBITER
             with st.chat_message("assistant", avatar="⚖️"):
                 st.write("**The Arbiter:**")
                 p3 = f"Act as Arbiter. {brand} {model}. Pros: {r1}. Def: {r2}. Issue Verdict: Resell vs Recycle."
@@ -89,17 +96,18 @@ def show_device_dashboard(role_name):
                 st.markdown(f"### VERDICT:\n{r3}")
                 persist_audit_log(rid, "VERDICT", {"text": r3})
             
-            st.session_state["last_run"] = rid
+            st.session_state['last_run'] = rid
 
-        if "last_run" in st.session_state:
+        if 'last_run' in st.session_state:
             st.divider()
-            chain = fetch_audit_chain(st.session_state["last_run"])
+            chain = fetch_audit_chain(st.session_state['last_run'])
             for _, row in chain.iterrows():
-                icon = "⚖️" if "VERDICT" in row["event_type"] else "🛑" if "PROSECUTOR" in row["event_type"] else "🛡️"
+                icon = "⚖️" if "VERDICT" in row['event_type'] else "🛑" if "PROSECUTOR" in row['event_type'] else "🛡️"
                 with st.chat_message("assistant", avatar=icon):
                     st.write(f"**{row['event_type']}**")
-                    render_clean(row["payload_json"])
+                    render_clean(row['payload_json'])
 
+    # --- TAB 2: SPECTRAL ---
     with tabs[2]: 
         st.subheader(f"{role_name} Signal Analysis")
         samples = payload.get("fft_samples")
@@ -107,14 +115,18 @@ def show_device_dashboard(role_name):
             res = run_fft_welch(samples, 100)
             st.metric("SNR", f"{res['snr_db']:.1f} dB")
             st.line_chart(samples[:60])
+            
             if st.button("Generate Report"):
                 llm = LLMClient("gemini")
                 if role_name == "Engineer":
-                    prompt = f"Act as Vibration Analyst. Subject: {brand} {model}. SNR {res['snr_db']:.1f} dB. Analyze harmonics."
+                    # Engineering Persona
+                    prompt = f"Act as Vibration Analyst. Subject: {brand} {model}. SNR {res['snr_db']:.1f} dB. Analyze harmonics and mechanical resonance."
                 else:
-                    prompt = f"Act as QA Director. Subject: {brand} {model}. SNR {res['snr_db']:.1f} dB. Assess return risk."
+                    # Management Persona
+                    prompt = f"Act as QA Director. Subject: {brand} {model}. SNR {res['snr_db']:.1f} dB. Assess return risk and warranty liability."
                 st.write(llm.complete(prompt))
 
+    # --- TAB 3: LIFECYCLE ---
     with tabs[3]: 
         st.subheader(f"{role_name} Projection")
         horizon = st.slider("Days", 10, 90, 30)
@@ -125,22 +137,25 @@ def show_device_dashboard(role_name):
             events = find_signal_events(hist)
             df = pd.DataFrame({"Forecast": [None]*len(hist) + fc, "Historical": hist + [None]*len(fc)})
             st.line_chart(df)
+            
             llm = LLMClient("gemini")
             if role_name == "Engineer":
-                prompt = f"Act as Chemist. {brand} {model}. Drop at Index {events['steepest_drop_idx']}. Analyze degradation."
+                # Engineering Persona
+                prompt = f"Act as Chemist. {brand} {model}. Drop at Index {events['steepest_drop_idx']}. Analyze degradation and lithium plating."
             else:
-                prompt = f"Act as Warranty Manager. {brand} {model}. Predicted {fc[-1]:.1f}%. Financial risk?"
+                # Management Persona
+                prompt = f"Act as Warranty Manager. {brand} {model}. Predicted {fc[-1]:.1f}%. Assess financial risk."
             st.write(llm.complete(prompt))
 
     with tabs[4]: 
         runs = fetch_runs_for_device(sel_id)
         if not runs.empty:
-            rid = st.selectbox("Run ID", runs["run_id"])
+            rid = st.selectbox("Run ID", runs['run_id'])
             chain = fetch_audit_chain(rid)
             st.dataframe(chain[["created_at", "event_type"]], use_container_width=True)
             for _, row in chain.iterrows():
                 with st.expander(f"{row['event_type']} ({row['created_at']})"):
-                    render_clean(row["payload_json"])
+                    render_clean(row['payload_json'])
 
     if role_name == "Engineer":
         st.markdown("---")
