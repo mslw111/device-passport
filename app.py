@@ -164,3 +164,4 @@ def show_device_dashboard(role_name):
 st.sidebar.title("✅ NEURAL AUDIT")
 role = st.sidebar.selectbox("Role", ["Management", "Engineer"])
 show_device_dashboard(role)
+ 
