@@ -41,74 +41,96 @@ def find_signal_events(data):
     }
 
 def show_device_dashboard(role_name):
-    st.title(f"🎛️ {role_name} Console v4.0 (Persona-Aware)")
+    st.title(f"🎛️ {role_name} Console v6.0 (Master)")
     
     # --- DB PROTECTION ---
-    try:
-        devices = list_devices()
-    except Exception:
-        st.error("Database connection failed. Please check Neon URL.")
-        st.stop()
-    
-    if not devices:
-        st.warning("Database is empty. Please run the SQL Seed Script in Neon.")
-        st.stop()
+    try: devices = list_devices()
+    except Exception: st.error("Database connection failed."); st.stop()
+    if not devices: st.warning("Database empty."); st.stop()
 
     dev_map = {d['device_id']: d for d in devices}
     sel_id = st.selectbox("Select Asset ID", list(dev_map.keys()))
     payload = get_device_payload(sel_id)
-    
     brand = payload.get("brand", "OEM")
     model = payload.get("model", "Hardware")
     
-    # --- DEFINE ROLE PERSONAS ---
-    if role_name == "Engineer":
-        persona_role = "Senior Failure Analysis Engineer"
-        focus_area = "root cause physics, component failure modes, circuit integrity, and repair feasibility"
-        tone = "Technical, Precise, Jargon-Heavy (e.g., Impedance, Harmonic Distortion)"
-    else: # Management
-        persona_role = "Product Operations Director"
-        focus_area = "financial risk, warranty liability, brand reputation, and resale grading (Grade A/B/C)"
-        tone = "Executive Summary, Financial Focus, Strategic Decision Making"
-
-    # TABS
-    tabs = st.tabs(["📋 Specs", "🤖 Risk Audit", "📈 Spectral Analysis", "🧠 Lifecycle Prediction", "🔒 Audit Chain"])
+    # --- TABS ---
+    tabs = st.tabs(["📋 Specs", "⚖️ Agentic Tribunal", "📈 Spectral Analysis", "🧠 Lifecycle Prediction", "🔒 Audit Chain"])
 
     with tabs[0]: 
         c1, c2 = st.columns(2)
         with c1: st.subheader("Sanitization Specs"); render_clean(payload.get("gdpr_flags"))
         with c2: st.subheader("Functional Grading"); render_clean(payload.get("r2v3_flags"))
 
-    with tabs[1]: # RISK AUDIT
-        st.info(f"Target: {brand} {model}")
-        if st.button("🚀 Initialize Protocol"):
-            llm = LLMClient("gemini")
-            with st.spinner(f"{role_name} Agents Analyzing..."):
-                rid = f"RUN-{pd.Timestamp.now().strftime('%H%M%S')}"
-                persist_run(rid, sel_id)
-                
-                # Dynamic Prompt
-                p1 = f"""
-                Act as a {persona_role}.
-                Review this device: {brand} {model}.
-                Data: {payload}.
-                Task: Identify critical issues focusing strictly on {focus_area}.
-                Tone: {tone}.
-                Be concise.
-                """
-                r1 = llm.complete(p1)
-                persist_audit_log(rid, "AGENT_ANALYSIS", {"text": r1})
-                st.session_state['last_run'] = rid
-                st.success("Analysis Complete")
+    # --- TAB 1: THE NEW AGENTIC DEBATE ---
+    with tabs[1]: 
+        st.subheader("Multi-Agent Adversarial Audit")
+        st.info(f"Subject: {brand} {model}")
         
+        if st.button("🚀 Launch Tribunal Protocol"):
+            llm = LLMClient("gemini")
+            rid = f"RUN-{pd.Timestamp.now().strftime('%H%M%S')}"
+            persist_run(rid, sel_id)
+
+            # 1. AGENT A: PROSECUTOR
+            with st.chat_message("user", avatar="🛑"):
+                st.write("**Agent A (Risk Auditor):** Analyzing liabilities...")
+                p_risk = f"""
+                Act as a STRICT Risk Auditor. Analyze {brand} {model}.
+                Data: {payload}.
+                Goal: Find every reason to REJECT this device (Safety, GDPR, Cosmetic).
+                Be aggressive. Max 3 sentences.
+                """
+                r_risk = llm.complete(p_risk)
+                st.write(r_risk)
+                persist_audit_log(rid, "DEBATE_PROSECUTOR", {"text": r_risk})
+
+            # 2. AGENT B: DEFENDER
+            with st.chat_message("assistant", avatar="🛡️"):
+                st.write("**Agent B (Value Recovery):** Analyzing potential...")
+                p_value = f"""
+                Act as a Value Recovery Specialist. Defend {brand} {model}.
+                Data: {payload}.
+                Prosecutor Argument: "{r_risk}"
+                Goal: Find value (spare parts, rare metals, repairable).
+                Counter-argue the risks. Max 3 sentences.
+                """
+                r_value = llm.complete(p_value)
+                st.write(r_value)
+                persist_audit_log(rid, "DEBATE_DEFENDER", {"text": r_value})
+
+            # 3. ARBITER
+            with st.chat_message("assistant", avatar="⚖️"):
+                st.write("**The Arbiter (Final Verdict):** Weighing evidence...")
+                p_arbiter = f"""
+                Act as a Supreme Arbiter.
+                Device: {brand} {model}.
+                Prosecutor says: "{r_risk}"
+                Defender says: "{r_value}"
+                
+                TASK: Issue a binding verdict.
+                1. Who won? (Risk vs Value).
+                2. Final Disposition: (Resell, Refurbish, or Recycle).
+                3. Rationale.
+                """
+                r_arbiter = llm.complete(p_arbiter)
+                st.markdown(f"### 🏛️ VERDICT: \n{r_arbiter}")
+                persist_audit_log(rid, "DEBATE_VERDICT", {"text": r_arbiter})
+            
+            st.session_state['last_run'] = rid
+            st.success("Tribunal Adjourned")
+
         if 'last_run' in st.session_state:
+            st.divider()
             chain = fetch_audit_chain(st.session_state['last_run'])
             for _, row in chain.iterrows():
-                with st.chat_message("assistant"):
+                icon = "⚖️" if "VERDICT" in row['event_type'] else "🛑" if "PROSECUTOR" in row['event_type'] else "🛡️"
+                with st.chat_message("assistant", avatar=icon):
                     st.write(f"**{row['event_type']}**")
                     render_clean(row['payload_json'])
 
-    with tabs[2]: # SPECTRAL (FFT)
+    # --- TAB 2: SPECTRAL (With FULL PERSONA PROMPTS restored) ---
+    with tabs[2]: 
         st.subheader(f"{role_name} Signal Analysis")
         samples = payload.get("fft_samples")
         if samples:
@@ -121,13 +143,11 @@ def show_device_dashboard(role_name):
             if st.button(btn_label):
                 llm = LLMClient("gemini")
                 
-                # SPLIT BRAIN PROMPT
+                # --- RESTORED RICH PROMPTS ---
                 if role_name == "Engineer":
                     prompt = f"""
-                    Act as a Senior Vibration Analyst.
-                    Subject: {brand} {model}.
+                    Act as a Senior Vibration Analyst. Subject: {brand} {model}.
                     Telemetry: SNR is {res['snr_db']:.1f} dB. Peak Frequency: {res['peak_freq_hz']:.1f} Hz.
-                    
                     Task: Write a Failure Hypothesis.
                     1. Analyze the noise floor. Use terms like 'Harmonic Distortion' or 'Mechanical Resonance'.
                     2. Speculate on the exact component failure (e.g. 'Microphone membrane detachment').
@@ -135,36 +155,34 @@ def show_device_dashboard(role_name):
                     """
                 else:
                     prompt = f"""
-                    Act as a Quality Assurance Director.
-                    Subject: {brand} {model}.
-                    Telemetry: SNR is {res['snr_db']:.1f} dB (Industry Standard for this price point is >20dB).
-                    
+                    Act as a Quality Assurance Director. Subject: {brand} {model}.
+                    Telemetry: SNR is {res['snr_db']:.1f} dB (Standard >20dB).
                     Task: Write a Business Risk Assessment.
                     1. Explain what low SNR means for the customer (e.g., "Noise Cancellation will fail").
-                    2. Estimate the return rate risk (High/Medium/Low).
-                    3. Decision: Should we ship this batch or issue a Recall?
+                    2. Estimate Return Rate Risk (High/Low).
+                    3. Decision: Quarantine or Ship?
                     """
                 
                 with st.spinner("Processing..."):
                     st.markdown(f"### 📝 {role_name} Assessment")
                     st.write(llm.complete(prompt))
 
-    with tabs[3]: # LIFECYCLE (FORECAST)
+    # --- TAB 3: LIFECYCLE (With FULL PERSONA PROMPTS restored) ---
+    with tabs[3]: 
         st.subheader(f"{role_name} Reliability Projection")
-        horizon = st.slider("Horizon (Days)", 10, 90, 30)
+        horizon = st.slider("Horizon", 10, 90, 30)
         
         if st.button("Run Neural Projection"):
             f_res = forecast_with_uncertainty(payload, horizon)
             hist = f_res["history_used"]
             fc = f_res["mean_forecast"]
             events = find_signal_events(hist)
-            
             df = pd.DataFrame({"Forecast": [None]*len(hist) + fc, "Historical": hist + [None]*len(fc)})
             st.line_chart(df)
             
             llm = LLMClient("gemini")
             
-            # SPLIT BRAIN PROMPT
+            # --- RESTORED RICH PROMPTS ---
             if role_name == "Engineer":
                 prompt = f"""
                 Act as a Battery Chemist. Subject: {brand} {model}.
@@ -179,13 +197,12 @@ def show_device_dashboard(role_name):
                 Data: Predicted health drops to {fc[-1]:.1f}% in {horizon} days.
                 Task:
                 1. Will this device survive the 12-month warranty period?
-                2. Financial Risk: If we resell this, what is the likelihood of a warranty claim (C:\Users\msell\OneDrive\AIAlchemy\devicepassport\clean$)?
-                3. Recommendation: Sell as 'Refurbished Grade B' or 'Scrap for Parts'?
+                2. Financial Risk: Likelihood of warranty claim (C:\Users\msell\OneDrive\AIAlchemy\devicepassport\clean$)?
+                3. Recommendation: Sell as 'Refurbished Grade B' or 'Scrap'?
                 """
             
-            with st.spinner("Calculating..."):
-                st.markdown(f"### 📝 {role_name} Assessment")
-                st.write(llm.complete(prompt))
+            st.markdown(f"### 📝 {role_name} Assessment")
+            st.write(llm.complete(prompt))
 
     with tabs[4]: # AUDIT
         runs = fetch_runs_for_device(sel_id)
