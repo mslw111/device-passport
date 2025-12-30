@@ -41,7 +41,7 @@ def find_signal_events(data):
     }
 
 def show_device_dashboard(role_name):
-    st.title(f"🎛️ {role_name} Console v6.0 (Master)")
+    st.title(f"🎛️ {role_name} Console v6.1 (Sanitized)")
     
     # --- DB PROTECTION ---
     try: devices = list_devices()
@@ -62,7 +62,7 @@ def show_device_dashboard(role_name):
         with c1: st.subheader("Sanitization Specs"); render_clean(payload.get("gdpr_flags"))
         with c2: st.subheader("Functional Grading"); render_clean(payload.get("r2v3_flags"))
 
-    # --- TAB 1: THE NEW AGENTIC DEBATE ---
+    # --- TAB 1: AGENTIC DEBATE ---
     with tabs[1]: 
         st.subheader("Multi-Agent Adversarial Audit")
         st.info(f"Subject: {brand} {model}")
@@ -72,10 +72,10 @@ def show_device_dashboard(role_name):
             rid = f"RUN-{pd.Timestamp.now().strftime('%H%M%S')}"
             persist_run(rid, sel_id)
 
-            # 1. AGENT A: PROSECUTOR
+            # 1. AGENT A: PROSECUTOR (Using 'rf' for Raw F-String to prevent unicode errors)
             with st.chat_message("user", avatar="🛑"):
                 st.write("**Agent A (Risk Auditor):** Analyzing liabilities...")
-                p_risk = f"""
+                p_risk = rf"""
                 Act as a STRICT Risk Auditor. Analyze {brand} {model}.
                 Data: {payload}.
                 Goal: Find every reason to REJECT this device (Safety, GDPR, Cosmetic).
@@ -88,7 +88,7 @@ def show_device_dashboard(role_name):
             # 2. AGENT B: DEFENDER
             with st.chat_message("assistant", avatar="🛡️"):
                 st.write("**Agent B (Value Recovery):** Analyzing potential...")
-                p_value = f"""
+                p_value = rf"""
                 Act as a Value Recovery Specialist. Defend {brand} {model}.
                 Data: {payload}.
                 Prosecutor Argument: "{r_risk}"
@@ -102,7 +102,7 @@ def show_device_dashboard(role_name):
             # 3. ARBITER
             with st.chat_message("assistant", avatar="⚖️"):
                 st.write("**The Arbiter (Final Verdict):** Weighing evidence...")
-                p_arbiter = f"""
+                p_arbiter = rf"""
                 Act as a Supreme Arbiter.
                 Device: {brand} {model}.
                 Prosecutor says: "{r_risk}"
@@ -129,7 +129,7 @@ def show_device_dashboard(role_name):
                     st.write(f"**{row['event_type']}**")
                     render_clean(row['payload_json'])
 
-    # --- TAB 2: SPECTRAL (With FULL PERSONA PROMPTS restored) ---
+    # --- TAB 2: SPECTRAL ---
     with tabs[2]: 
         st.subheader(f"{role_name} Signal Analysis")
         samples = payload.get("fft_samples")
@@ -143,9 +143,8 @@ def show_device_dashboard(role_name):
             if st.button(btn_label):
                 llm = LLMClient("gemini")
                 
-                # --- RESTORED RICH PROMPTS ---
                 if role_name == "Engineer":
-                    prompt = f"""
+                    prompt = rf"""
                     Act as a Senior Vibration Analyst. Subject: {brand} {model}.
                     Telemetry: SNR is {res['snr_db']:.1f} dB. Peak Frequency: {res['peak_freq_hz']:.1f} Hz.
                     Task: Write a Failure Hypothesis.
@@ -154,7 +153,7 @@ def show_device_dashboard(role_name):
                     3. Recommend a repair (e.g. 'Reflow solder').
                     """
                 else:
-                    prompt = f"""
+                    prompt = rf"""
                     Act as a Quality Assurance Director. Subject: {brand} {model}.
                     Telemetry: SNR is {res['snr_db']:.1f} dB (Standard >20dB).
                     Task: Write a Business Risk Assessment.
@@ -167,7 +166,7 @@ def show_device_dashboard(role_name):
                     st.markdown(f"### 📝 {role_name} Assessment")
                     st.write(llm.complete(prompt))
 
-    # --- TAB 3: LIFECYCLE (With FULL PERSONA PROMPTS restored) ---
+    # --- TAB 3: LIFECYCLE ---
     with tabs[3]: 
         st.subheader(f"{role_name} Reliability Projection")
         horizon = st.slider("Horizon", 10, 90, 30)
@@ -182,9 +181,8 @@ def show_device_dashboard(role_name):
             
             llm = LLMClient("gemini")
             
-            # --- RESTORED RICH PROMPTS ---
             if role_name == "Engineer":
-                prompt = f"""
+                prompt = rf"""
                 Act as a Battery Chemist. Subject: {brand} {model}.
                 Data: A steep drop of {events['steepest_drop_val']:.2f}% was detected at Index {events['steepest_drop_idx']}.
                 Task:
@@ -192,7 +190,7 @@ def show_device_dashboard(role_name):
                 2. Assess thermal risks.
                 """
             else:
-                prompt = f"""
+                prompt = rf"""
                 Act as a Warranty Manager. Subject: {brand} {model}.
                 Data: Predicted health drops to {fc[-1]:.1f}% in {horizon} days.
                 Task:
@@ -204,7 +202,7 @@ def show_device_dashboard(role_name):
             st.markdown(f"### 📝 {role_name} Assessment")
             st.write(llm.complete(prompt))
 
-    with tabs[4]: # AUDIT
+    with tabs[4]: 
         runs = fetch_runs_for_device(sel_id)
         if not runs.empty:
             rid = st.selectbox("Run ID", runs['run_id'])
