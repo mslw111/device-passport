@@ -79,3 +79,6 @@ if __name__ == "__main__":
     if seed_database():
         time.sleep(1)
         launch_app()
+st.sidebar.title("✅ NEURAL AUDIT")
+role = st.sidebar.selectbox("Role", ["Management", "Engineer"])
+show_device_dashboard(role)
