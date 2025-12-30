@@ -1,0 +1,8 @@
+﻿streamlit
+pandas
+psycopg2-binary
+python-dotenv
+openai
+google-genai
+scipy
+numpy
