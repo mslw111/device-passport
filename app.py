@@ -11,7 +11,7 @@ from datetime import datetime
 # --- CONFIG ---
 st.set_page_config(page_title="RefurbOS Command", layout="wide", page_icon="🛡️")
 
-# --- 1. LLM CLIENT ---
+# --- 1. LLM CLIENT (Enhanced Narrative Engine) ---
 class LLMClient:
     def __init__(self):
         self.key = st.secrets.get("OPENAI_API_KEY", "").strip()
@@ -26,7 +26,11 @@ class LLMClient:
         try:
             resp = self.client.chat.completions.create(
                 model="gpt-4",
-                messages=[{"role": "user", "content": prompt}]
+                messages=[
+                    {"role": "system", "content": "You are a professional hardware forensic auditor specialized in R2v3, NIST 800-88, and ISO standards. Provide deep technical narratives, not one-word answers."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7
             )
             return resp.choices[0].message.content
         except Exception as e: return f"Error: {e}"
@@ -48,20 +52,19 @@ def analyze_spectrum(samples):
 def forecast_linear(history):
     if not history: return [], 0
     y = np.array(history)
-    z = np.polyfit(np.arange(len(y)), y, 1)
+    x = np.arange(len(y))
+    z = np.polyfit(x, y, 1)
     p = np.poly1d(z)
-    future = p(np.arange(len(y), len(y)+60))
+    future = p(np.arange(len(y), len(y)+90)) # 90-day neural projection
     return future, z[0]
 
 # --- 4. MAIN DASHBOARD ---
 def show_dashboard():
-    # SIDEBAR
     st.sidebar.title("🛡️ RefurbOS Kernel")
     
     conn = get_db_connection()
     if not conn:
-        st.error("Missing Database Configuration.")
-        return
+        st.error("Missing Database Configuration."); return
 
     # FETCH ASSETS
     try:
@@ -69,12 +72,10 @@ def show_dashboard():
             cur.execute("SELECT device_id, device_payload FROM device_registry")
             rows = cur.fetchall()
     except Exception as e:
-        st.error(f"System Error: {e}")
-        return
+        st.error(f"System Error: {e}"); return
 
     if not rows:
-        st.warning("Vault Empty: No assets detected in Neon 'device_registry'.")
-        return
+        st.warning("Vault Empty: Check Neon 'device_registry' table."); return
 
     # PILLAR 1: ASSET SELECTION & OVERVIEW
     dev_map = {r['device_id']: r['device_payload'] for r in rows}
@@ -82,7 +83,6 @@ def show_dashboard():
     sel_id = st.sidebar.selectbox("⌚ SELECT ASSET ID", asset_ids)
     
     data = dev_map[sel_id]
-    
     st.title(f"Refurb Audit: {data.get('brand')} {data.get('model')}")
     
     c1, c2, c3, c4 = st.columns(4)
@@ -91,50 +91,58 @@ def show_dashboard():
     c3.metric("R2v3 Grade", data['condition'].get('grade'))
     c4.markdown("### ✅ #GDPR_WIPED")
 
-    # PILLAR 2, 3, 4, 5: THE CORE TABS
     tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Audit Chain"])
 
-    # PILLAR 3: SIGNAL AGI (FFT Analysis)
+    # PILLAR 3: SIGNAL AGI (FFT Interpretation)
     with tabs[0]:
-        st.subheader("Spectral Analysis (FFT)")
+        st.subheader("Spectral Analysis & Frequency Interpretation")
         sig = data['telemetry'].get('haptic_signal', [])
         if sig:
             res = analyze_spectrum(sig)
             c1, c2 = st.columns([2, 1])
             c1.line_chart(sig)
-            if c2.button("Run Signal AGI"):
+            st.caption(f"Peak: {res['peak']:.2f}Hz | SNR: {res['snr']:.2f}dB")
+            
+            if st.button("Generate Signal Narrative"):
                 llm = LLMClient()
-                prompt = (f"Analyze FFT for {sel_id}. Peak: {res['peak']:.2f}Hz, SNR: {res['snr']:.2f}dB. "
-                          "Is the haptic motor loose? Tag #HARDWARE_PASS or #HARDWARE_FAIL.")
+                prompt = (f"Perform a spectral forensic analysis on Unit {sel_id}. "
+                          f"The FFT shows a peak frequency of {res['peak']:.2f}Hz and an SNR of {res['snr']:.2f}dB. "
+                          "Provide a detailed narrative on haptic motor health. "
+                          "Does this indicate mechanical 'rattle' or sensor oxidation? "
+                          "Use #IEC_60068 and #QC_PASS/FAIL.")
+                st.write("---")
                 st.info(llm.complete(prompt))
-        else: st.info("No haptic telemetry available.")
+        else: st.info("No haptic telemetry.")
 
-    # PILLAR 4: FORECAST AGI (Neural Degradation)
+    # PILLAR 4: FORECAST AGI (Lifecycle Narrative)
     with tabs[1]:
-        st.subheader("Neural Degradation Forecast")
+        st.subheader("Neural Degradation & Lifecycle Forecasting")
         hist = data['telemetry'].get('battery_history', [])
         if hist:
             fc, slope = forecast_linear(hist)
-            c1, c2 = st.columns([2, 1])
-            c1.line_chart(list(hist) + list(fc))
-            if c2.button("Run Forecast AGI"):
+            st.line_chart(list(hist) + list(fc))
+            st.caption(f"Calculated Degradation Slope: {slope:.5f} / day")
+            
+            if st.button("Generate Forecast Interpretation"):
                 llm = LLMClient()
-                prompt = (f"Battery decay slope: {slope:.4f}. Current: {data['condition']['battery']}%. "
-                          "Advise: #RESALE or #RECYCLE based on international standards.")
+                prompt = (f"Act as a Lifecycle Strategist. This {data.get('model')} has a battery degradation slope of {slope:.5f}. "
+                          f"Current Health: {data['condition'].get('battery')}%. "
+                          "Provide a deep technical narrative forecasting the 'Time-to-Failure'. "
+                          "Evaluate value recovery options: #R2v3_REUSE, #LIFECYCLE_EXTENSION, or #RECOVERY.")
+                st.write("---")
                 st.success(llm.complete(prompt))
-        else: st.info("No battery history available.")
 
-    # PILLAR 2: AGENT DEBATE (Adversarial Audit)
+    # PILLAR 2: AGENT DEBATE (Adversarial Multi-Agent Audit)
     with tabs[2]:
-        st.subheader("Adversarial Multi-Agent Tribunal")
+        st.subheader("Adversarial Multi-Agent Audit Tribunal")
         if st.button("⚔️ CONVENE AUDIT TRIBUNAL"):
             llm = LLMClient()
             with st.chat_message("user", avatar="👮"):
-                st.write("**Compliance Officer:** #R2v3 Risks...")
-                st.write(llm.complete(f"Critique unit {sel_id} for compliance gaps."))
+                st.write("**Compliance Auditor:** R2v3/NIST 800-88 Audit...")
+                st.write(llm.complete(f"Critique unit {sel_id} for R2v3 Core Requirement 6 and GDPR data sanitization risks."))
             with st.chat_message("assistant", avatar="💰"):
-                st.write("**Revenue Lead:** Refurbishment Potential...")
-                st.write(llm.complete(f"Argue for the resale value of this {data.get('model')}."))
+                st.write("**Revenue Lead:** Value Maximization Case...")
+                st.write(llm.complete(f"Argue for the secondary market value of this {data.get('model')} despite the auditor's findings."))
 
     # PILLAR 5: AUDIT CHAIN (Immutable Log)
     with tabs[3]:
@@ -144,7 +152,7 @@ def show_dashboard():
                 cur.execute("SELECT event_type, created_at FROM audit_log ORDER BY created_at DESC LIMIT 20")
                 for row in cur.fetchall():
                     st.write(f"🔹 {row[1]} | {row[0]}")
-        except: st.write("Ledger offline or no history entries.")
+        except: st.write("Audit History Unavailable.")
 
 if __name__ == "__main__":
     show_dashboard()
