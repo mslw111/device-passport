@@ -11,9 +11,27 @@ from datetime import datetime
 # --- CONFIG ---
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="🛡️")
 
+# CSS FIX: Forced High Contrast for Forensic Reports
 st.markdown("""<style>
-    .stTextArea textarea { font-size: 14px !important; color: #d1d1d1; }
-    .report-text { font-family: 'Helvetica Neue', sans-serif; line-height: 1.6; background-color: #1e1e1e; padding: 15px; border-radius: 5px; }
+    /* Force text areas to be legible */
+    .stTextArea textarea { 
+        font-size: 14px !important; 
+        color: #FFFFFF !important; 
+        background-color: #0E1117 !important; 
+        font-family: 'Courier New', monospace;
+    }
+    /* Style the historical report blocks in the ledger */
+    .report-text { 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+        line-height: 1.6; 
+        background-color: #262730; 
+        color: #FFFFFF; 
+        padding: 20px; 
+        border-radius: 8px; 
+        border-left: 5px solid #ff4b4b;
+    }
+    /* Ensure metric labels are visible */
+    [data-testid="stMetricLabel"] { color: #AAAAAA !important; }
 </style>""", unsafe_allow_html=True)
 
 # --- 1. LLM CLIENT ---
@@ -31,7 +49,7 @@ class LLMClient:
             resp = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "Professional Forensic Auditor. Output clean technical prose with hashtags. No JSON format."},
+                    {"role": "system", "content": "Professional Forensic Auditor. Use technical hashtags. Output clear, high-contrast prose."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -149,17 +167,10 @@ def show_dashboard():
             
             for entry in history:
                 payload = entry['payload_json']
-                # --- CRASH FIX: SCRIPT-SIDE JSON HANDLING ---
                 if isinstance(payload, str):
-                    try:
-                        payload = json.loads(payload)
-                    except:
-                        payload = {"narrative": str(payload)}
+                    try: payload = json.loads(payload)
+                    except: payload = {"narrative": str(payload)}
                 
-                # Double-check it's now a dict
-                if not isinstance(payload, dict):
-                    payload = {"narrative": str(payload)}
-
                 narrative_text = payload.get('narrative', str(payload))
                 
                 with st.expander(f"EVENT: {entry['event_type']} | DATE: {entry['created_at'].strftime('%Y-%m-%d %H:%M')}"):
