@@ -7,7 +7,10 @@ import numpy as np
 import psycopg2
 import psycopg2.extras
 from scipy import signal
-from db_access import * from db_persist import persist_run, persist_audit_log
+
+# --- CORRECTED IMPORTS ---
+from db_access import *
+from db_persist import persist_run, persist_audit_log
 from llm_client import LLMClient
 
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="⌚")
