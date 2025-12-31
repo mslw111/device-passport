@@ -11,29 +11,6 @@ from datetime import datetime
 # --- CONFIG ---
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="🛡️")
 
-# CSS FIX: Forced High Contrast for Forensic Reports
-st.markdown("""<style>
-    /* Force text areas to be legible */
-    .stTextArea textarea { 
-        font-size: 14px !important; 
-        color: #FFFFFF !important; 
-        background-color: #0E1117 !important; 
-        font-family: 'Courier New', monospace;
-    }
-    /* Style the historical report blocks in the ledger */
-    .report-text { 
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-        line-height: 1.6; 
-        background-color: #262730; 
-        color: #FFFFFF; 
-        padding: 20px; 
-        border-radius: 8px; 
-        border-left: 5px solid #ff4b4b;
-    }
-    /* Ensure metric labels are visible */
-    [data-testid="stMetricLabel"] { color: #AAAAAA !important; }
-</style>""", unsafe_allow_html=True)
-
 # --- 1. LLM CLIENT ---
 class LLMClient:
     def __init__(self):
@@ -49,7 +26,7 @@ class LLMClient:
             resp = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "Professional Forensic Auditor. Use technical hashtags. Output clear, high-contrast prose."},
+                    {"role": "system", "content": "Professional Forensic Auditor. Output technical prose with hashtags. Use clear, direct language."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -90,7 +67,37 @@ def forecast_linear(history):
     z = np.polyfit(x, y, 1)
     return np.poly1d(z)(np.arange(len(y), len(y)+90)), z[0]
 
-# --- 4. DASHBOARD ---
+# --- 4. UI HELPER (THE FIX) ---
+def display_forensic_text(text, color_type="normal"):
+    """Forces high-contrast text rendering to bypass Streamlit theme bugs"""
+    bg_color = "#fdfdfd" # Almost white
+    text_color = "#1a1a1a" # Almost black
+    border = "1px solid #ddd"
+    
+    if color_type == "critique":
+        bg_color = "#fff5f5" # Light red
+        border = "2px solid #ff4b4b"
+    elif color_type == "success":
+        bg_color = "#f0fff4" # Light green
+        border = "2px solid #23d160"
+
+    st.markdown(f"""
+        <div style="
+            background-color: {bg_color}; 
+            color: {text_color}; 
+            padding: 20px; 
+            border-radius: 10px; 
+            border: {border}; 
+            font-family: sans-serif; 
+            line-height: 1.6;
+            margin-bottom: 10px;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        ">
+            {text}
+        </div>
+    """, unsafe_allow_html=True)
+
+# --- 5. DASHBOARD ---
 def show_dashboard():
     st.sidebar.title("🛡️ RefurbOS Kernel")
     conn = get_db_connection()
@@ -124,7 +131,7 @@ def show_dashboard():
         if c_tx.button("Interpret Signal Telemetry"):
             llm = LLMClient()
             narrative = llm.complete(f"Forensic Analysis for {sel_id}. FFT Peak {res['peak']:.2f}Hz. Diagnose #IEC_60068.")
-            st.text_area("Engineering Report", narrative, height=300)
+            display_forensic_text(narrative)
             record_audit(sel_id, "SIGNAL_REPORT", narrative)
 
     with tabs[1]:
@@ -136,7 +143,7 @@ def show_dashboard():
         if c_tx.button("Forecast Lifecycle Strategy"):
             llm = LLMClient()
             narrative = llm.complete(f"Battery decay slope {slope:.5f}. Current {data['condition'].get('battery')}%. Advise #R2v3_REUSE.")
-            st.text_area("Lifecycle Narrative", narrative, height=300)
+            display_forensic_text(narrative, "success")
             record_audit(sel_id, "LIFECYCLE_REPORT", narrative)
 
     with tabs[2]:
@@ -145,8 +152,10 @@ def show_dashboard():
             llm = LLMClient()
             critique = llm.complete(f"Strict R2v3 Auditor critique for unit {sel_id}.")
             defense = llm.complete(f"Sales Lead rebuttal for {sel_id}.")
-            st.text_area("👮 Compliance Critique", critique, height=200)
-            st.text_area("💰 Revenue Defense", defense, height=200)
+            st.markdown("#### 👮 Auditor Critique")
+            display_forensic_text(critique, "critique")
+            st.markdown("#### 💰 Sales Defense")
+            display_forensic_text(defense, "success")
             record_audit(sel_id, "TRIBUNAL_DEBATE", f"AUDIT: {critique}\n\nSALES: {defense}")
 
     with tabs[3]:
@@ -160,11 +169,6 @@ def show_dashboard():
             history = cur.fetchall()
 
         if history:
-            if st.button("🧠 Synthesize Audit History (AGI Summary)"):
-                llm = LLMClient()
-                history_text = " ".join([str(h['payload_json']) for h in history])
-                st.warning(llm.complete(f"Review compliance summary for {sel_id}: {history_text[:2000]}"))
-            
             for entry in history:
                 payload = entry['payload_json']
                 if isinstance(payload, str):
@@ -172,9 +176,8 @@ def show_dashboard():
                     except: payload = {"narrative": str(payload)}
                 
                 narrative_text = payload.get('narrative', str(payload))
-                
                 with st.expander(f"EVENT: {entry['event_type']} | DATE: {entry['created_at'].strftime('%Y-%m-%d %H:%M')}"):
-                    st.markdown(f'<div class="report-text">{narrative_text}</div>', unsafe_allow_html=True)
+                    display_forensic_text(narrative_text)
         else:
             st.info("No audit history recorded.")
 
