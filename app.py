@@ -12,33 +12,55 @@ from llm_client import LLMClient
 
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="⌚")
 
-# --- 1. ENGINEERING UTILS (Restored) ---
-def run_fft_welch(samples, rate=100):
-    if not samples or len(samples) < 10: return {"peak_freq_hz": 0, "snr_db": 0}
+# --- 1. ENGINEERING LOGIC ---
+def analyze_spectrum(samples, rate=50):
+    """
+    Performs FFT (Fast Fourier Transform) to find frequency anomalies.
+    """
+    if not samples or len(samples) < 10: 
+        return None
+    
     x = np.array(samples)
-    f, Pxx = signal.welch(x, fs=rate, nperseg=min(len(x), 256))
-    peak_idx = np.argmax(Pxx)
-    snr = 10 * np.log10(Pxx[peak_idx] / np.mean(Pxx)) if np.mean(Pxx) > 0 else 0
-    return {"peak_freq_hz": float(f[peak_idx]), "snr_db": float(snr), "spectrum": Pxx, "freqs": f}
+    # Welchs method for spectral density
+    freqs, power = signal.welch(x, fs=rate, nperseg=len(x))
+    
+    # Find dominant frequency
+    peak_idx = np.argmax(power)
+    peak_freq = freqs[peak_idx]
+    
+    return {
+        "frequencies": freqs,
+        "power_density": power,
+        "peak_freq": peak_freq,
+        "signal_mean": np.mean(x),
+        "signal_std": np.std(x)
+    }
 
-def forecast_degradation(history, horizon=30):
-    if not history: return ([0]*horizon, [0]*horizon, [0]*horizon)
+def forecast_linear(history, days=90):
+    """
+    Simple linear regression forecast for battery health.
+    """
+    if not history or len(history) < 2:
+        return [], [], []
+        
     x = np.arange(len(history))
     y = np.array(history)
-    if len(y) < 2: return ([y[0]]*horizon, [y[0]]*horizon, [y[0]]*horizon)
     
-    z = np.polyfit(x, y, 1) # Linear trend
-    p = np.poly1d(z)
+    # Fit line
+    slope, intercept = np.polyfit(x, y, 1)
     
-    future_x = np.arange(len(history), len(history)+horizon)
-    forecast = p(future_x)
+    # Forecast
+    future_x = np.arange(len(history), len(history) + days)
+    forecast = slope * future_x + intercept
     
-    sigma = np.std(y)
-    upper = forecast + (1.96 * sigma)
-    lower = forecast - (1.96 * sigma)
+    # Simple confidence intervals based on historical noise
+    noise = np.std(y - (slope * x + intercept))
+    upper = forecast + (1.96 * noise)
+    lower = forecast - (1.96 * noise)
+    
     return forecast, lower, upper
 
-# --- 2. DATABASE UTILS (Cloud Ready) ---
+# --- 2. DB AUTO-INIT (NO BUTTONS) ---
 def get_db_connection():
     DB_URL = os.getenv("DATABASE_URL")
     if not DB_URL and "DATABASE_URL" in st.secrets:
@@ -46,178 +68,186 @@ def get_db_connection():
     if not DB_URL: return None
     return psycopg2.connect(DB_URL)
 
-def admin_seed_database():
-    """Wipes and reseeds 1000 units (Admin Only)"""
+def check_and_seed_if_empty():
+    """
+    Automatically populates DB if empty. No user action required.
+    """
     conn = get_db_connection()
-    if not conn: st.error("No Database URL found."); return
+    if not conn: return
     cur = conn.cursor()
-
-    cur.execute("DROP TABLE IF EXISTS audit_log, runs, device_registry CASCADE")
-    cur.execute("CREATE TABLE device_registry (device_id VARCHAR(50) PRIMARY KEY, device_payload JSONB)")
-    cur.execute("CREATE TABLE runs (run_id VARCHAR(50) PRIMARY KEY, device_id VARCHAR(50), created_at TIMESTAMP DEFAULT NOW())")
-    cur.execute("CREATE TABLE audit_log (id SERIAL PRIMARY KEY, run_id VARCHAR(50), event_type VARCHAR(50), payload_json JSONB, created_at TIMESTAMP DEFAULT NOW())")
-
-    brands = ["Apple", "Samsung", "Garmin"]
-    progress = st.progress(0)
     
-    for i in range(1, 1001):
-        brand = random.choice(brands)
-        is_broken = random.random() < 0.2
-        grade = "Grade D (Salvage)" if is_broken else random.choice(["Grade A (Mint)", "Grade B (Good)"])
-        
-        # Simulated Telemetry for FFT
-        # Good watches = Clean Sine Wave (Heart rate)
-        # Bad watches = Noisy/Random data
-        t = np.linspace(0, 10, 100)
-        clean_sig = np.sin(2 * np.pi * 1.5 * t) # 1.5Hz heartbeat
-        noise = np.random.normal(0, 0.1 if not is_broken else 2.0, 100)
-        telemetry_data = (clean_sig + noise).tolist()
-        
-        # Battery History (Decaying)
-        start_health = random.randint(90, 100)
-        decay_rate = random.uniform(0.01, 0.1) if not is_broken else random.uniform(0.2, 0.5)
-        batt_hist = [start_health - (d * decay_rate) for d in range(50)]
-
-        data = {
-            "brand": brand,
-            "model": f"Series {random.randint(7,9)}",
-            "specs": {"size_mm": random.choice([41, 45, 49]), "material": "Aluminum"},
-            "condition": {"grade": grade, "battery_health": int(batt_hist[-1])},
-            "telemetry": {"fft_samples": telemetry_data, "battery_history": batt_hist},
-            "flags": {"water_damage": is_broken, "screen_scratch": is_broken}
-        }
-        did = f"{brand.upper()}-{i:04d}"
-        cur.execute("INSERT INTO device_registry VALUES (%s, %s)", (did, json.dumps(data)))
-        if i % 100 == 0: progress.progress(i/1000)
-    
-    conn.commit()
-    conn.close()
-    st.success("Database Reset Complete."); st.rerun()
-
-# --- 3. MAIN DASHBOARD ---
-def show_dashboard():
-    # SIDEBAR CONFIG
-    st.sidebar.title("⌚ RefurbOS Pro")
-    
-    # Admin Reset (Hidden in Expander)
-    with st.sidebar.expander("🔧 Admin / Reset"):
-        if st.button("Reset Database (1000 Units)"):
-            admin_seed_database()
-
-    # Load Data
+    # Check count
     try:
-        devices = list_devices()
-        if not devices:
-            st.warning("Database empty. Open sidebar 'Admin / Reset' and click Reset.")
-            return
-    except Exception:
-        st.error("Database Connection Failed. Check Secrets."); return
-
-    # Selector
-    dev_map = {d['device_id']: d for d in devices}
-    sel_id = st.sidebar.selectbox("Select Device Asset", list(dev_map.keys()))
-    data = get_device_payload(sel_id)
-
-    # Safely extract data (Fixes the crash)
-    specs = data.get('specs', {})
-    cond = data.get('condition', {})
-    tel = data.get('telemetry', {})
-    fft_data = tel.get('fft_samples', [])
-    batt_hist = tel.get('battery_history', [])
-
-    # HEADER METRICS
-    st.title(f"{data.get('brand')} {data.get('model')}")
-    
-    cols = st.columns(5)
-    cols[0].metric("Case Size", f"{specs.get('size_mm', 'N/A')} mm")
-    cols[1].metric("Housing", specs.get('material', 'N/A'))
-    cols[2].metric("Battery SoH", f"{cond.get('battery_health', 0)}%")
-    
-    # Grade logic with safety check
-    grade_str = str(cond.get('grade', 'Unknown'))
-    grade_color = "red" if "Grade D" in grade_str else "green"
-    cols[3].markdown(f"**Grade:** :{grade_color}[{grade_str}]")
-    
-    cols[4].metric("Water Seal", "FAIL" if data.get('flags', {}).get('water_damage') else "PASS")
-
-    # TABS
-    tabs = st.tabs(["📈 Signal Analysis (FFT)", "🔮 Lifecycle Forecast", "🤖 AI Tribunal", "📝 Audit Logs"])
-
-    # TAB 1: SPECTRAL ANALYSIS (Restored)
-    with tabs[0]:
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            st.subheader("Haptic/Sensor Vibration Analysis")
-            if fft_data:
-                # Plot Raw Signal
-                st.line_chart(fft_data, height=250)
+        cur.execute("SELECT COUNT(*) FROM device_registry")
+        count = cur.fetchone()[0]
+    except:
+        count = 0
+        
+    if count == 0:
+        with st.spinner("⚡ Initializing RefurbOS Database (First Run Only)..."):
+            # Recreate Schema
+            cur.execute("DROP TABLE IF EXISTS audit_log, runs, device_registry CASCADE")
+            cur.execute("CREATE TABLE device_registry (device_id VARCHAR(50) PRIMARY KEY, device_payload JSONB)")
+            cur.execute("CREATE TABLE runs (run_id VARCHAR(50) PRIMARY KEY, device_id VARCHAR(50), created_at TIMESTAMP DEFAULT NOW())")
+            cur.execute("CREATE TABLE audit_log (id SERIAL PRIMARY KEY, run_id VARCHAR(50), event_type VARCHAR(50), payload_json JSONB, created_at TIMESTAMP DEFAULT NOW())")
+            
+            # Seed Data
+            brands = ["Apple", "Samsung", "Garmin"]
+            for i in range(1, 1001):
+                brand = random.choice(brands)
                 
-                # Run FFT
-                res = run_fft_welch(fft_data)
-                st.caption(f"Peak Freq: {res['peak_freq_hz']:.2f} Hz | SNR: {res['snr_db']:.2f} dB")
-                if res['snr_db'] < 5:
-                    st.error("⚠️ LOW SIGNAL-TO-NOISE: Possible Sensor Corrosion or Motor Failure")
+                # Generate Telemetry Signals
+                # 1. Clean Signal (Sine wave)
+                t = np.linspace(0, 4, 100)
+                clean_sig = 10 * np.sin(2 * np.pi * 2.0 * t) # 2Hz signal
+                
+                # 2. Add Defects
+                is_broken = random.random() < 0.2
+                if is_broken:
+                    # Add random noise (Rattle)
+                    noise = np.random.normal(0, 5, 100)
+                    sig = clean_sig + noise
+                    grade = "Grade D (Salvage)"
+                    batt_decay = 0.5
                 else:
-                    st.success("✅ Signal Clean: Sensor Nominal")
-            else:
-                st.info("No telemetry data available.")
-        with c2:
-            st.write("**Diagnostics:**")
-            st.write("- Gyro Drift: 0.02%")
-            st.write("- Accel Variance: Low")
+                    noise = np.random.normal(0, 0.5, 100)
+                    sig = clean_sig + noise
+                    grade = "Grade A (Mint)"
+                    batt_decay = 0.05
 
-    # TAB 2: FORECASTING (Restored)
-    with tabs[1]:
-        st.subheader("Battery Degradation Projection")
-        if batt_hist:
-            horizon = st.slider("Forecast Horizon (Days)", 30, 180, 90)
-            fc, lo, up = forecast_degradation(batt_hist, horizon)
+                # Battery History
+                start_batt = random.randint(90, 100)
+                history = [start_batt - (x * batt_decay) for x in range(30)]
+
+                data = {
+                    "brand": brand,
+                    "model": f"Series {random.randint(7,9)}",
+                    "specs": {"size": random.choice([41, 45, 49])},
+                    "condition": {"grade": grade, "battery": int(history[-1])},
+                    "telemetry": {
+                        "haptic_signal": sig.tolist(),
+                        "battery_history": history
+                    }
+                }
+                did = f"{brand.upper()}-{i:04d}"
+                cur.execute("INSERT INTO device_registry VALUES (%s, %s)", (did, json.dumps(data)))
             
-            # Combine history + forecast for chart
-            chart_data = pd.DataFrame({
-                "Historical": batt_hist + [None]*len(fc),
-                "Forecast": [None]*len(batt_hist) + list(fc),
-                "Lower Bound": [None]*len(batt_hist) + list(lo),
-                "Upper Bound": [None]*len(batt_hist) + list(up)
-            })
-            st.line_chart(chart_data)
+            conn.commit()
+            st.success("Database Ready.")
+            st.rerun()
+    conn.close()
+
+# --- 3. DASHBOARD ---
+def show_dashboard():
+    # 1. Auto-Init
+    check_and_seed_if_empty()
+    
+    st.sidebar.title("⌚ RefurbOS")
+    
+    # 2. Load Data
+    try: devices = list_devices()
+    except: st.error("Database connection failed."); return
+    
+    if not devices: st.warning("Initializing..."); return
+
+    # 3. Sidebar Selection
+    dev_map = {d['device_id']: d for d in devices}
+    sel_id = st.sidebar.selectbox("Select Asset", list(dev_map.keys()))
+    data = get_device_payload(sel_id)
+    
+    # 4. Extract
+    telemetry = data.get('telemetry', {})
+    signal_data = telemetry.get('haptic_signal', [])
+    batt_hist = telemetry.get('battery_history', [])
+    
+    # 5. Header
+    st.title(f"{data.get('brand')} {data.get('model')}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Grade", data['condition']['grade'])
+    col2.metric("Battery Health", f"{data['condition']['battery']}%")
+    col3.metric("Case Size", f"{data['specs']['size']}mm")
+
+    # 6. TABS
+    tabs = st.tabs(["📉 Spectral Analysis (FFT)", "🔮 Forecasting", "🤖 AI Tribunal", "📝 Logs"])
+
+    # TAB 1: FOURIER TRANSFORM
+    with tabs[0]:
+        st.subheader("Haptic Engine Frequency Response")
+        if signal_data:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                # A. Raw Signal Chart
+                st.caption("Raw Vibration Telemetry (Time Domain)")
+                st.line_chart(signal_data)
             
-            final_health = fc[-1]
-            if final_health < 80:
-                st.warning(f"⚠️ Unit will drop below 80% health in {horizon} days. Recommend Battery Swap.")
-            else:
-                st.success(f"✅ Battery stable. Projected health: {final_health:.1f}%")
+            with c2:
+                # B. FFT Chart
+                res = analyze_spectrum(signal_data)
+                if res:
+                    st.caption("Frequency Spectrum (Frequency Domain)")
+                    
+                    # Create a dataframe for the spectrum chart
+                    fft_df = pd.DataFrame({
+                        "Frequency (Hz)": res['frequencies'],
+                        "Power Density": res['power_density']
+                    })
+                    st.line_chart(fft_df, x="Frequency (Hz)", y="Power Density")
+                    
+                    st.metric("Dominant Frequency", f"{res['peak_freq']:.2f} Hz")
+                    if res['signal_std'] > 4:
+                        st.error("⚠️ High Noise Detected (Possible Loose Component)")
+                    else:
+                        st.success("✅ Signal Clean")
         else:
-            st.info("No historical battery data.")
+            st.info("No telemetry data found.")
 
-    # TAB 3: AI TRIBUNAL
+    # TAB 2: FORECASTING
+    with tabs[1]:
+        st.subheader("Lifecycle Prediction")
+        if batt_hist:
+            horizon = st.slider("Project Days", 30, 365, 90)
+            fc, lo, up = forecast_linear(batt_hist, horizon)
+            
+            # Combine for chart
+            hist_len = len(batt_hist)
+            fc_len = len(fc)
+            
+            # Pad data so they align on the chart
+            # History needs 'None' for the future
+            # Forecast needs 'None' for the past
+            
+            chart_data = pd.DataFrame({
+                "Historical": batt_hist + [None]*fc_len,
+                "Forecast": [None]*hist_len + list(fc),
+                "Lower Bound": [None]*hist_len + list(lo),
+                "Upper Bound": [None]*hist_len + list(up)
+            })
+            
+            st.line_chart(chart_data)
+            st.caption(f"Projected Health in {horizon} days: {fc[-1]:.1f}%")
+        else:
+            st.info("No battery history available.")
+
+    # TAB 3: TRIBUNAL
     with tabs[2]:
-        if st.button("🚀 Convene Assessment Tribunal"):
+        if st.button("Run AI Assessment"):
             llm = LLMClient("openai")
             rid = f"RUN-{pd.Timestamp.now().strftime('%H%M%S')}"
             persist_run(rid, sel_id)
-
-            # 1. Risk
+            
             with st.chat_message("user", avatar="🛑"):
-                st.write("**Risk Auditor**")
-                p1 = f"Analyze {data.get('brand')} watch. Grade: {grade_str}. SNR: {run_fft_welch(fft_data)['snr_db']}dB. Identify strict risks."
-                r1 = llm.complete(p1)
-                st.write(r1)
-                persist_audit_log(rid, "RISK", {"text": r1})
-
-            # 2. Value
-            with st.chat_message("assistant", avatar="💰"):
-                st.write("**Value Recovery**")
-                p2 = f"Argue for refurbishment value of {data.get('model')}. Counterpoint: {r1}."
-                r2 = llm.complete(p2)
-                st.write(r2)
-                persist_audit_log(rid, "VALUE", {"text": r2})
+                st.write("Analyzing Telemetry...")
+                prompt = f"Device: {data['model']}. Grade: {data['condition']['grade']}. Battery Trend: {batt_hist[-1]}%. Signal Noise: {'High' if np.std(signal_data) > 4 else 'Low'}. Assess Refurb Viability."
+                resp = llm.complete(prompt)
+                st.write(resp)
+                persist_audit_log(rid, "AI_ANALYSIS", {"text": resp})
 
     # TAB 4: LOGS
     with tabs[3]:
         runs = fetch_runs_for_device(sel_id)
         if not runs.empty:
             for rid in runs['run_id']:
+                st.write(f"Run: {rid}")
                 chain = fetch_audit_chain(rid)
                 st.table(chain[['created_at', 'event_type', 'payload_json']])
 
