@@ -1,10 +1,20 @@
-﻿import psycopg2
+import psycopg2
 import psycopg2.extras
 import pandas as pd
 import os
+import streamlit as st
+import json
 
-# CLOUD READY: Looks for environment variable first, falls back to localhost
-DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/device_passport")
+# 1. Try Local Env
+DB_URL = os.getenv("DATABASE_URL")
+
+# 2. If missing, Try Streamlit Secrets
+if not DB_URL and "DATABASE_URL" in st.secrets:
+    DB_URL = st.secrets["DATABASE_URL"]
+
+# 3. Fallback (This explains the "5 devices" - it might be hitting a local test.db)
+if not DB_URL:
+    DB_URL = "postgresql://postgres:postgres@localhost:5432/device_passport"
 
 def get_conn():
     return psycopg2.connect(DB_URL)
@@ -16,6 +26,7 @@ def init_db_schema():
             cur.execute("CREATE TABLE device_registry (device_id VARCHAR(50) PRIMARY KEY, device_payload JSONB)")
             cur.execute("CREATE TABLE runs (run_id VARCHAR(50) PRIMARY KEY, device_id VARCHAR(50), created_at TIMESTAMP DEFAULT NOW())")
             cur.execute("CREATE TABLE audit_log (id SERIAL PRIMARY KEY, run_id VARCHAR(50), event_type VARCHAR(50), payload_json JSONB, created_at TIMESTAMP DEFAULT NOW())")
+            conn.commit()
 
 def list_devices():
     with get_conn() as conn:
