@@ -5,8 +5,7 @@ import random
 import os
 import psycopg2
 import psycopg2.extras
-from db_access import * # Keeps your existing DB logic
-from db_persist import persist_run, persist_audit_log
+from db_access import * from db_persist import persist_run, persist_audit_log
 from llm_client import LLMClient
 
 st.set_page_config(page_title="RefurbOS", layout="wide", page_icon="⌚")
