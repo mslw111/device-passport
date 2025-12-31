@@ -8,191 +8,142 @@ import psycopg2.extras
 from scipy import signal
 from datetime import datetime
 
+# --- CONFIG ---
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="🛡️")
 
-# --- 0. DIAGNOSTIC PANEL (DEBUGGING) ---
-# This section will tell you EXACTLY what is failing on the screen.
-st.sidebar.header("🔧 System Diagnostics")
-
-# Check Database
-db_url = st.secrets.get("DATABASE_URL")
-if db_url:
-    st.sidebar.success("✅ Database Secret Found")
-else:
-    st.sidebar.error("❌ Database Secret MISSING")
-
-# Check OpenAI Key
-api_key = st.secrets.get("OPENAI_API_KEY")
-if api_key:
-    # Show first 4 and last 4 chars to verify it's the right key
-    masked_key = f"{api_key[:4]}...{api_key[-4:]}"
-    st.sidebar.success(f"✅ API Key Loaded: {masked_key}")
-else:
-    st.sidebar.error("❌ OpenAI API Key MISSING in Secrets")
-
-
-# --- 1. ROBUST CLIENT ---
+# --- 1. LLM CLIENT (Fixed for sk-proj keys) ---
 class LLMClient:
     def __init__(self):
-        # Force strip to remove any hidden spaces causing 401 errors
         self.key = st.secrets.get("OPENAI_API_KEY", "").strip()
-        
-        if not self.key:
+        try:
+            from openai import OpenAI
+            self.client = OpenAI(api_key=self.key)
+        except:
             self.client = None
-        else:
-            try:
-                from openai import OpenAI
-                self.client = OpenAI(api_key=self.key)
-            except Exception as e:
-                st.error(f"Library Error: {e}")
-                self.client = None
 
     def complete(self, prompt):
-        if not self.client:
-            return "⚠️ Error: API Key is missing or invalid. Check the Sidebar Diagnostics."
+        if not self.client: return "AI Key Error."
         try:
-            # Using standard chat completion
-            response = self.client.chat.completions.create(
+            resp = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}]
             )
-            return response.choices[0].message.content
-        except Exception as e:
-            # This prints the EXACT error from OpenAI to the screen
-            return f"⚠️ OpenAI Error: {str(e)}"
+            return resp.choices[0].message.content
+        except Exception as e: return f"Error: {e}"
 
-# --- 2. DATABASE ---
+# --- 2. DB CONNECTION ---
 def get_db_connection():
-    if db_url:
-        return psycopg2.connect(db_url)
-    return None
+    url = st.secrets.get("DATABASE_URL")
+    return psycopg2.connect(url) if url else None
 
-def persist_run(run_id, device_id):
-    conn = get_db_connection()
-    if not conn: return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO runs (run_id, device_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (run_id, device_id))
-        conn.commit()
-    except: pass
-    finally: conn.close()
-
-def persist_audit_log(run_id, event_type, payload):
-    conn = get_db_connection()
-    if not conn: return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO audit_log (run_id, event_type, payload_json) VALUES (%s, %s, %s)", (run_id, event_type, json.dumps(payload)))
-        conn.commit()
-    except: pass
-    finally: conn.close()
-
-# --- 3. MATH ---
+# --- 3. MATH ENGINE ---
 def analyze_spectrum(samples):
-    if not samples: return None
+    if not samples: return {"peak": 0, "snr": 0}
     x = np.array(samples)
     freqs, power = signal.welch(x, fs=50)
-    peak_idx = np.argmax(power)
-    return {"freqs": freqs, "power": power, "peak_freq": freqs[peak_idx], "snr": 10 * np.log10(power[peak_idx] / np.mean(power))}
+    peak = freqs[np.argmax(power)]
+    snr = 10 * np.log10(np.max(power) / np.mean(power))
+    return {"freqs": freqs, "power": power, "peak": peak, "snr": snr}
 
 def forecast_linear(history):
-    if not history: return [], [], 0
+    if not history: return [], 0
     y = np.array(history)
-    x = np.arange(len(y))
-    z = np.polyfit(x, y, 1)
+    z = np.polyfit(np.arange(len(y)), y, 1)
     p = np.poly1d(z)
-    future_x = np.arange(len(y), len(y) + 90)
-    return p(future_x), [], z[0]
+    future = p(np.arange(len(y), len(y)+60))
+    return future, z[0]
 
-# --- 4. DASHBOARD ---
+# --- 4. MAIN DASHBOARD ---
 def show_dashboard():
-    st.title("🛡️ RefurbOS Command Center")
+    # Sidebar Status
+    st.sidebar.title("🛡️ RefurbOS Kernel")
+    st.sidebar.success("✅ Neon DB Linked")
     
     conn = get_db_connection()
     if not conn:
-        st.warning("⚠️ Waiting for Database Connection... (Check Secrets)")
+        st.error("Missing DATABASE_URL in Secrets.")
         return
 
+    # FETCH ALL WATCHES FROM NEON
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM device_registry LIMIT 1000")
-            devices = cur.fetchall()
+            cur.execute("SELECT device_id, device_payload FROM device_registry")
+            rows = cur.fetchall()
     except Exception as e:
-        st.error(f"Database Error: {e}")
+        st.error(f"SQL Error: {e}")
         return
 
-    if not devices:
-        st.info("Database connected but empty. Please run the SQL seed script in Neon.")
+    if not rows:
+        st.warning("Query returned 0 rows. Check your 'device_registry' table in Neon.")
         return
 
-    # Selector
-    dev_map = {d['device_id']: d for d in devices}
-    sel_id = st.sidebar.selectbox("Select Asset", list(dev_map.keys()))
+    # MAP DATA TO SELECTOR
+    dev_map = {r['device_id']: r['device_payload'] for r in rows}
+    asset_ids = sorted(list(dev_map.keys()))
+    sel_id = st.sidebar.selectbox("⌚ SELECT WATCH UNIT", asset_ids)
     
-    data = dev_map[sel_id]['device_payload']
-    cond = data.get('condition', {})
-    telemetry = data.get('telemetry', {})
+    data = dev_map[sel_id]
     
-    # Overview
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Asset", data.get('model'))
-    c2.metric("Grade", cond.get('grade'))
-    c3.metric("Battery", f"{cond.get('battery')}%")
-    c4.success("✅ #GDPR_COMPLIANT")
+    # PILLAR 1: OVERVIEW & COMPLIANCE FLAGS
+    st.title(f"RefurbOS Audit: {data.get('brand')} {data.get('model')}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Asset ID", sel_id)
+    m2.metric("Battery SoH", f"{data['condition'].get('battery')}%")
+    m3.metric("R2v3 Grade", data['condition'].get('grade'))
+    m4.markdown("### ✅ #GDPR_WIPED")
 
-    # Tabs
-    t1, t2, t3, t4 = st.tabs(["Signal AGI", "Forecast AGI", "Agent Debate", "Audit Chain"])
+    tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Audit Chain"])
 
-    # T1: Signal
-    with t1:
-        st.subheader("Spectral Analysis")
-        sig = telemetry.get('haptic_signal', [])
+    # PILLAR 3: SIGNAL AGI
+    with tabs[0]:
+        st.subheader("Spectral Analysis (FFT)")
+        sig = data['telemetry'].get('haptic_signal', [])
         if sig:
             res = analyze_spectrum(sig)
-            st.line_chart(sig)
-            if st.button("🧠 Analyze Signal (AGI)"):
+            c1, c2 = st.columns([2, 1])
+            c1.line_chart(sig)
+            if c2.button("Run Signal AGI"):
                 llm = LLMClient()
-                prompt = f"Analyze FFT. Peak: {res['peak_freq']:.2f}Hz. SNR: {res['snr']:.2f}dB. Pass/Fail?"
+                prompt = (f"Analyze FFT for {sel_id}. Peak: {res['peak']:.2f}Hz, SNR: {res['snr']:.2f}dB. "
+                          "Is the haptic motor loose? Tag #HARDWARE_PASS or #HARDWARE_FAIL.")
                 st.info(llm.complete(prompt))
+        else: st.info("No haptic telemetry.")
 
-    # T2: Forecast
-    with t2:
-        st.subheader("Degradation Forecast")
-        hist = telemetry.get('battery_history', [])
+    # PILLAR 4: FORECAST AGI
+    with tabs[1]:
+        st.subheader("Neural Degradation Forecast")
+        hist = data['telemetry'].get('battery_history', [])
         if hist:
-            fc, _, slope = forecast_linear(hist)
-            st.line_chart(hist + list(fc))
-            if st.button("🧠 Generate Strategy (AGI)"):
+            fc, slope = forecast_linear(hist)
+            c1, c2 = st.columns([2, 1])
+            c1.line_chart(list(hist) + list(fc))
+            if c2.button("Run Forecast AGI"):
                 llm = LLMClient()
-                prompt = f"Battery degradation slope: {slope:.4f}. Current: {cond.get('battery')}%. Resale strategy?"
+                prompt = (f"Battery decay slope: {slope:.4f}. Current: {data['condition']['battery']}%. "
+                          "Advise: #RESALE or #RECYCLE based on international standards.")
                 st.success(llm.complete(prompt))
 
-    # T3: Debate
-    with t3:
-        st.subheader("Adversarial Audit")
-        if st.button("⚔️ Start Debate"):
+    # PILLAR 2: AGENT DEBATE (Adversarial Audit)
+    with tabs[2]:
+        st.subheader("Adversarial Multi-Agent Tribunal")
+        if st.button("⚔️ CONVENE AUDIT TRIBUNAL"):
             llm = LLMClient()
-            rid = f"DEBATE-{datetime.now().strftime('%H%M%S')}"
-            persist_run(rid, sel_id)
-            
-            st.write("Generating Critique...")
-            r1 = llm.complete(f"Critique {data.get('model')} Grade {cond.get('grade')}. Be harsh.")
-            st.error(f"👮 Compliance: {r1}")
-            persist_audit_log(rid, "CRITIQUE", r1)
-            
-            st.write("Generating Defense...")
-            r2 = llm.complete(f"Defend against: {r1}. Argue for value.")
-            st.success(f"💰 Sales: {r2}")
-            persist_audit_log(rid, "DEFENSE", r2)
+            with st.chat_message("user", avatar="👮"):
+                st.write("**Compliance Officer:** Identifying R2v3/GDPR risks...")
+                st.write(llm.complete(f"Critique this unit {sel_id} for compliance gaps."))
+            with st.chat_message("assistant", avatar="💰"):
+                st.write("**Revenue Lead:** Defending refurbishment value...")
+                st.write(llm.complete(f"Argue for the resale value of this {data.get('model')}."))
 
-    # T4: Logs
-    with t4:
-        st.write("Live Ledger")
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM runs WHERE device_id=%s ORDER BY created_at DESC", (sel_id,))
-            runs = cur.fetchall()
-            for r in runs:
-                st.write(f"Run: {r[0]}")
+    # PILLAR 5: AUDIT CHAIN
+    with tabs[3]:
+        st.subheader("Immutable Audit Ledger")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT event_type, created_at FROM audit_log WHERE run_id LIKE %s ORDER BY created_at DESC", (f"%{sel_id}%",))
+                for row in cur.fetchall():
+                    st.write(f"🔹 {row[1]} | {row[0]}")
+        except: st.write("No specific audit history for this unit yet.")
 
 if __name__ == "__main__":
     show_dashboard()
