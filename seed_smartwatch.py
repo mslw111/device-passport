@@ -1,104 +1,91 @@
-# seed_smartwatch.py
+import os
 import json
-import numpy as np
 import random
-from db_access import init_db_schema, get_conn
+import psycopg2
+from dotenv import load_dotenv
 
-print("⌚ INITIALIZING SMARTWATCH DATABASE (1000 UNITS)...")
-init_db_schema()
+# Force load local .env to find Neon URL
+load_dotenv(override=True)
+DB_URL = os.getenv("DATABASE_URL")
 
-conn = get_conn()
-cur = conn.cursor()
+if not DB_URL or "localhost" in DB_URL:
+    print("⚠️ WARNING: You seem to be connected to Localhost, not Cloud.")
+    print("   Please check your .env file for the Neon URL.")
 
-# CONFIGURATION
-BRANDS = {
-    "Apple": ["Watch Series 7", "Watch Series 8", "Watch Ultra"],
-    "Garmin": ["Fenix 7", "Venu 2", "Forerunner 965"],
-    "Samsung": ["Galaxy Watch 5", "Galaxy Watch 6 Classic"]
-}
+print(f"🔌 CONNECTING TO: {DB_URL.split('@')[1] if '@' in DB_URL else 'DB'}...")
 
-CONDITIONS = ["New Open Box", "Grade A", "Grade B", "Grade C (Fail)"]
-BAND_TYPES = ["Silicone", "Milanese Loop", "Leather Link", "Alpine Loop"]
-
-# DEFECT POOL (For the 30% bad units)
-DEFECTS = [
-    "Salt corrosion on charging contacts",
-    "Weak Taptic Engine (Haptic failure)",
-    "Micro-abrasions on Heart Rate Sensor",
-    "Digital Crown stuck/sticky",
-    "Oleophobic coating delamination",
-    "Sweat ingress in barometer port"
-]
-
-print("🏭 Fabricating 1000 Smartwatches...")
-
-for i in range(1, 1001):
-    # 1. Select Identity
-    brand = random.choice(list(BRANDS.keys()))
-    model = random.choice(BRANDS[brand])
-    did = f"{brand.upper()}-{model.replace(' ', '')}-{i:04d}"
-    
-    # 2. Determine Fate (70% Good, 30% Flawed)
-    is_defective = random.random() < 0.30
-    
-    if is_defective:
-        condition = "Grade C (Fail)"
-        defect = random.choice(DEFECTS)
-        sensor_status = "Degraded (Signal Noise)"
-        haptic_health = random.randint(40, 70) # Low score
-        band_cond = "Worn / Discolored"
-    else:
-        condition = random.choice(["New Open Box", "Grade A", "Grade B"])
-        defect = "None"
-        sensor_status = "Optimal"
-        haptic_health = random.randint(90, 100)
-        band_cond = "Good"
-
-    # 3. Telemetry Generation (Simulated)
-    # Heart Rate Sensor Noise (Higher variance = worse sensor)
-    hr_variance = random.uniform(0.1, 0.5) if not is_defective else random.uniform(1.5, 5.0)
-    fft_samples = np.random.normal(0, hr_variance, 100).tolist()
-    
-    # Battery decay curve
-    cycles = random.randint(5, 500)
-    health = max(80, 100 - (cycles * 0.05))
-
-    payload = {
-        "brand": brand,
-        "model": model,
-        "type": "Smartwatch",
-        "specs": {
-            "case_size_mm": random.choice([40, 41, 44, 45, 49]),
-            "band_type": random.choice(BAND_TYPES),
-            "housing_material": random.choice(["Aluminum", "Stainless Steel", "Titanium"])
-        },
-        "r2v3_flags": {
-            "cosmetic_grade": condition,
-            "band_condition": band_cond,
-            "primary_defect": defect,
-            "battery_health_percent": int(health),
-            "cycle_count": cycles
-        },
-        "telemetry": {
-            "haptic_motor_score": haptic_health,
-            "sensor_oxidation_check": sensor_status,
-            "water_seal_integrity": "Pass" if not is_defective else random.choice(["Pass", "Fail"])
-        },
-        "fft_samples": fft_samples
+def generate_watch(i):
+    # Guaranteed Data - No N/As
+    brands = ["Apple", "Samsung", "Garmin"]
+    models = {
+        "Apple": ["Watch Series 9", "Watch Ultra 2", "Watch SE"],
+        "Samsung": ["Galaxy Watch 6", "Galaxy Watch 5 Pro"],
+        "Garmin": ["Fenix 7X", "Epix Gen 2", "Venu 3"]
     }
     
-    # 4. Insert Device
-    cur.execute("INSERT INTO device_registry (device_id, device_payload) VALUES (%s, %s)", 
-                (did, json.dumps(payload)))
+    brand = random.choice(brands)
+    model = random.choice(models[brand])
     
-    # 5. Insert Initial Audit Log (Ingest)
-    run_id = f"RUN-INGEST-{i:04d}"
+    # Specific Specs per model
+    if "Ultra" in model or "Fenix" in model: size = "49mm"
+    elif "Pro" in model: size = "45mm"
+    else: size = random.choice(["41mm", "45mm"])
+    
+    # Condition Logic
+    is_broken = random.random() < 0.15
+    grade = "Grade D (Salvage)" if is_broken else random.choice(["Grade A (Like New)", "Grade B (Minor Wear)"])
+    
+    return {
+        "brand": brand,
+        "model": model,
+        "specs": {
+            "case_size": size,
+            "material": "Titanium" if "Ultra" in model else "Aluminum",
+            "band": "Alpine Loop" if "Ultra" in model else "Silicone Sport"
+        },
+        "condition": {
+            "grade": grade,
+            "battery_health": random.randint(82, 100),
+            "scratches": "Deep" if is_broken else "None"
+        },
+        "telemetry": {
+            "sensor_oxidation": "Detected" if is_broken else "Clean",
+            "haptic_response": "Weak" if is_broken else "Normal"
+        }
+    }
+
+conn = psycopg2.connect(DB_URL)
+cur = conn.cursor()
+
+print("🧹 Wiping old data...")
+cur.execute("DROP TABLE IF EXISTS audit_log, runs, device_registry CASCADE")
+
+print("🏗️ Recreating Tables...")
+cur.execute("CREATE TABLE device_registry (device_id VARCHAR(50) PRIMARY KEY, device_payload JSONB)")
+cur.execute("CREATE TABLE runs (run_id VARCHAR(50) PRIMARY KEY, device_id VARCHAR(50), created_at TIMESTAMP DEFAULT NOW())")
+cur.execute("CREATE TABLE audit_log (id SERIAL PRIMARY KEY, run_id VARCHAR(50), event_type VARCHAR(50), payload_json JSONB, created_at TIMESTAMP DEFAULT NOW())")
+
+print("🚀 Injecting 1000 Clean Smartwatches...")
+for i in range(1, 1001):
+    data = generate_watch(i)
+    did = f"{data['brand'].upper()}-{i:04d}"
+    
+    # Insert Device
+    cur.execute("INSERT INTO device_registry VALUES (%s, %s)", (did, json.dumps(data)))
+    
+    # Insert distinct history (NOT a chat log)
+    run_id = f"HIST-{i}"
     cur.execute("INSERT INTO runs (run_id, device_id) VALUES (%s, %s)", (run_id, did))
     
-    log_text = f"Unit received. Visual inspection: {defect}. Battery Cycles: {cycles}."
+    # Log 1: Import
     cur.execute("INSERT INTO audit_log (run_id, event_type, payload_json) VALUES (%s, %s, %s)",
-                (run_id, "LOGISTICS_RECEIVE", json.dumps({"text": log_text})))
+                (run_id, "SYSTEM_INGEST", json.dumps({"location": "Warehouse A", "agent": "Scanner_Bot_4"})))
+    
+    # Log 2: Triage (Only for some)
+    if data['condition']['grade'] == "Grade A (Like New)":
+         cur.execute("INSERT INTO audit_log (run_id, event_type, payload_json) VALUES (%s, %s, %s)",
+                (run_id, "AUTO_TRIAGE", json.dumps({"status": "Direct-to-Resale", "price_est": "$250"})))
 
 conn.commit()
 conn.close()
-print("✅ SUCCESS: 1000 Smartwatches seeded into Neon DB.")
+print("✅ SUCCESS: 1000 Units Seeded.")
