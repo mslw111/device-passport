@@ -11,10 +11,9 @@ from datetime import datetime
 # --- CONFIG ---
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="🛡️")
 
-# CSS to kill JSON-style formatting in the UI
 st.markdown("""<style>
     .stTextArea textarea { font-size: 14px !important; color: #d1d1d1; }
-    .report-text { font-family: 'Helvetica Neue', sans-serif; line-height: 1.6; }
+    .report-text { font-family: 'Helvetica Neue', sans-serif; line-height: 1.6; background-color: #1e1e1e; padding: 15px; border-radius: 5px; }
 </style>""", unsafe_allow_html=True)
 
 # --- 1. LLM CLIENT ---
@@ -32,7 +31,7 @@ class LLMClient:
             resp = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a lead Forensic Auditor. Output clean, professional prose. Use technical hashtags. Absolutely no JSON formatting in your response."},
+                    {"role": "system", "content": "Professional Forensic Auditor. Output clean technical prose with hashtags. No JSON format."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -69,7 +68,8 @@ def analyze_spectrum(samples):
 def forecast_linear(history):
     if not history: return [], 0
     y = np.array(history)
-    z = np.polyfit(np.arange(len(y)), y, 1)
+    x = np.arange(len(y))
+    z = np.polyfit(x, y, 1)
     return np.poly1d(z)(np.arange(len(y), len(y)+90)), z[0]
 
 # --- 4. DASHBOARD ---
@@ -78,19 +78,17 @@ def show_dashboard():
     conn = get_db_connection()
     if not conn: st.error("Database Link Failure."); return
 
-    # FETCH ASSETS
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT device_id, device_payload FROM device_registry")
         rows = cur.fetchall()
 
-    if not rows: st.warning("No Assets in Vault."); return
+    if not rows: st.warning("No Assets Found."); return
 
     dev_map = {r['device_id']: r['device_payload'] for r in rows}
     sel_id = st.sidebar.selectbox("⌚ SELECT ASSET ID", sorted(list(dev_map.keys())))
     data = dev_map[sel_id]
     
-    # Pillar 1: Overview
-    st.title(f"Refurb Audit: {data.get('model')}")
+    st.title(f"Refurb Audit: {data.get('brand')} {data.get('model')}")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Asset ID", sel_id)
     c2.metric("SoH", f"{data['condition'].get('battery')}%")
@@ -99,49 +97,42 @@ def show_dashboard():
 
     tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Audit Ledger"])
 
-    # Pillar 3: Signal AGI
     with tabs[0]:
+        st.subheader("Haptic Frequency Domain Analysis")
         sig = data['telemetry'].get('haptic_signal', [])
         res = analyze_spectrum(sig)
-        st.subheader("Haptic Frequency Domain Analysis")
         c_ch, c_tx = st.columns([2, 1.5])
         c_ch.line_chart(sig, height=250)
-        
         if c_tx.button("Interpret Signal Telemetry"):
             llm = LLMClient()
-            narrative = llm.complete(f"Forensic Analysis for {sel_id}. FFT Peak {res['peak']:.2f}Hz. Diagnose mechanical rattle vs oxidation. Use #IEC_60068.")
+            narrative = llm.complete(f"Forensic Analysis for {sel_id}. FFT Peak {res['peak']:.2f}Hz. Diagnose #IEC_60068.")
             st.text_area("Engineering Report", narrative, height=300)
             record_audit(sel_id, "SIGNAL_REPORT", narrative)
 
-    # Pillar 4: Forecast AGI
     with tabs[1]:
+        st.subheader("Battery Lifecycle & Yield Projection")
         hist = data['telemetry'].get('battery_history', [])
         fc, slope = forecast_linear(hist)
-        st.subheader("Battery Lifecycle & Yield Projection")
         c_ch, c_tx = st.columns([2, 1.5])
         c_ch.line_chart(list(hist) + list(fc), height=250)
-        
         if c_tx.button("Forecast Lifecycle Strategy"):
             llm = LLMClient()
-            narrative = llm.complete(f"Strategist Review: Battery decay slope {slope:.5f}. Current {data['condition'].get('battery')}%. Forecast failure and advise #R2v3_REUSE.")
+            narrative = llm.complete(f"Battery decay slope {slope:.5f}. Current {data['condition'].get('battery')}%. Advise #R2v3_REUSE.")
             st.text_area("Lifecycle Narrative", narrative, height=300)
             record_audit(sel_id, "LIFECYCLE_REPORT", narrative)
 
-    # Pillar 2: Agent Debate
     with tabs[2]:
         st.subheader("Adversarial Multi-Agent Audit")
         if st.button("⚔️ CONVENE AUDIT TRIBUNAL"):
             llm = LLMClient()
-            critique = llm.complete(f"Act as a strict R2v3 Auditor. Critique unit {sel_id} technical specs.")
-            defense = llm.complete(f"Act as a Sales Lead. Rebut the critique for {sel_id}.")
+            critique = llm.complete(f"Strict R2v3 Auditor critique for unit {sel_id}.")
+            defense = llm.complete(f"Sales Lead rebuttal for {sel_id}.")
             st.text_area("👮 Compliance Critique", critique, height=200)
             st.text_area("💰 Revenue Defense", defense, height=200)
             record_audit(sel_id, "TRIBUNAL_DEBATE", f"AUDIT: {critique}\n\nSALES: {defense}")
 
-    # Pillar 5: Immutable Ledger (CLEAN PROSE)
     with tabs[3]:
         st.subheader("📜 Chain of Custody & Audit History")
-        
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
                 SELECT runs.created_at, audit_log.event_type, audit_log.payload_json 
@@ -153,24 +144,28 @@ def show_dashboard():
         if history:
             if st.button("🧠 Synthesize Audit History (AGI Summary)"):
                 llm = LLMClient()
-                # We pull just the text for the summary to avoid JSON tokens
                 history_text = " ".join([str(h['payload_json']) for h in history])
-                summary = llm.complete(f"Review this history and provide a clean compliance summary for {sel_id}: {history_text[:2000]}")
-                st.warning(summary)
+                st.warning(llm.complete(f"Review compliance summary for {sel_id}: {history_text[:2000]}"))
             
             for entry in history:
-                # Force JSON to String/Narrative conversion
                 payload = entry['payload_json']
-                if isinstance(payload, str): 
-                    try: payload = json.loads(payload)
-                    except: pass
+                # --- CRASH FIX: SCRIPT-SIDE JSON HANDLING ---
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except:
+                        payload = {"narrative": str(payload)}
                 
+                # Double-check it's now a dict
+                if not isinstance(payload, dict):
+                    payload = {"narrative": str(payload)}
+
                 narrative_text = payload.get('narrative', str(payload))
                 
                 with st.expander(f"EVENT: {entry['event_type']} | DATE: {entry['created_at'].strftime('%Y-%m-%d %H:%M')}"):
                     st.markdown(f'<div class="report-text">{narrative_text}</div>', unsafe_allow_html=True)
         else:
-            st.info("No audit history recorded for this unit.")
+            st.info("No audit history recorded.")
 
 if __name__ == "__main__":
     show_dashboard()
