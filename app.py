@@ -67,31 +67,36 @@ def forecast_linear(history):
     z = np.polyfit(x, y, 1)
     return np.poly1d(z)(np.arange(len(y), len(y)+90)), z[0]
 
-# --- 4. UI HELPER (THE FIX) ---
+# --- 4. THE FORCED-VISIBILITY COMPONENT ---
 def display_forensic_text(text, color_type="normal"):
-    """Forces high-contrast text rendering to bypass Streamlit theme bugs"""
-    bg_color = "#fdfdfd" # Almost white
-    text_color = "#1a1a1a" # Almost black
-    border = "1px solid #ddd"
+    """Nuclear option: Forces high-contrast colors using !important to bypass all CSS themes"""
+    bg = "#FFFFFF"
+    fg = "#000000"
+    border = "#DDDDDD"
     
     if color_type == "critique":
-        bg_color = "#fff5f5" # Light red
-        border = "2px solid #ff4b4b"
+        bg = "#FFF0F0"
+        border = "#FF0000"
     elif color_type == "success":
-        bg_color = "#f0fff4" # Light green
-        border = "2px solid #23d160"
+        bg = "#F0FFF0"
+        border = "#008000"
 
+    # We use a unique ID and raw HTML to force the browser's hand
     st.markdown(f"""
         <div style="
-            background-color: {bg_color}; 
-            color: {text_color}; 
-            padding: 20px; 
-            border-radius: 10px; 
-            border: {border}; 
-            font-family: sans-serif; 
-            line-height: 1.6;
-            margin-bottom: 10px;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+            background-color: {bg} !important; 
+            color: {fg} !important; 
+            padding: 25px !important; 
+            border-radius: 8px !important; 
+            border: 2px solid {border} !important; 
+            font-family: 'Arial', sans-serif !important; 
+            font-size: 16px !important;
+            font-weight: 500 !important;
+            line-height: 1.6 !important;
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            margin: 10px 0 !important;
         ">
             {text}
         </div>
@@ -116,8 +121,8 @@ def show_dashboard():
     st.title(f"Refurb Audit: {data.get('brand')} {data.get('model')}")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Asset ID", sel_id)
-    c2.metric("SoH", f"{data['condition'].get('battery')}%")
-    c3.metric("R2v3 Grade", data['condition'].get('grade'))
+    c2.metric("SoH", f"{data['condition'].get('battery', 0)}%")
+    c3.metric("Grade", data['condition'].get('grade', 'N/A'))
     c4.markdown("### ✅ #GDPR_WIPED")
 
     tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Audit Ledger"])
@@ -128,7 +133,7 @@ def show_dashboard():
         res = analyze_spectrum(sig)
         c_ch, c_tx = st.columns([2, 1.5])
         c_ch.line_chart(sig, height=250)
-        if c_tx.button("Interpret Signal Telemetry"):
+        if c_tx.button("Interpret Signal Telemetry", key="btn_sig"):
             llm = LLMClient()
             narrative = llm.complete(f"Forensic Analysis for {sel_id}. FFT Peak {res['peak']:.2f}Hz. Diagnose #IEC_60068.")
             display_forensic_text(narrative)
@@ -140,7 +145,7 @@ def show_dashboard():
         fc, slope = forecast_linear(hist)
         c_ch, c_tx = st.columns([2, 1.5])
         c_ch.line_chart(list(hist) + list(fc), height=250)
-        if c_tx.button("Forecast Lifecycle Strategy"):
+        if c_tx.button("Forecast Lifecycle Strategy", key="btn_fc"):
             llm = LLMClient()
             narrative = llm.complete(f"Battery decay slope {slope:.5f}. Current {data['condition'].get('battery')}%. Advise #R2v3_REUSE.")
             display_forensic_text(narrative, "success")
@@ -148,7 +153,7 @@ def show_dashboard():
 
     with tabs[2]:
         st.subheader("Adversarial Multi-Agent Audit")
-        if st.button("⚔️ CONVENE AUDIT TRIBUNAL"):
+        if st.button("⚔️ CONVENE AUDIT TRIBUNAL", key="btn_trib"):
             llm = LLMClient()
             critique = llm.complete(f"Strict R2v3 Auditor critique for unit {sel_id}.")
             defense = llm.complete(f"Sales Lead rebuttal for {sel_id}.")
@@ -177,6 +182,7 @@ def show_dashboard():
                 
                 narrative_text = payload.get('narrative', str(payload))
                 with st.expander(f"EVENT: {entry['event_type']} | DATE: {entry['created_at'].strftime('%Y-%m-%d %H:%M')}"):
+                    # History items also get the nuclear visibility treatment
                     display_forensic_text(narrative_text)
         else:
             st.info("No audit history recorded.")
