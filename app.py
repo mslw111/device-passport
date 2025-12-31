@@ -1,123 +1,119 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import json
-import numpy as np
+import os
 from db_access import *
 from db_persist import persist_run, persist_audit_log
-from dsp_utils import run_fft_welch
 from llm_client import LLMClient
 
-st.set_page_config(page_title="Wearable Passport", layout="wide", page_icon="⌚")
+st.set_page_config(page_title="RefurbOS", layout="wide", page_icon="⌚")
 
-def render_clean(data):
-    if isinstance(data, dict):
-        # Flatten dict for table view
-        df = pd.DataFrame([{"Metric": k.replace("_", " ").title(), "Value": v} for k,v in data.items()])
-        st.table(df)
-    else:
-        st.write(data)
+# UI STYLING
+st.markdown("""
+<style>
+    .metric-box {
+        background-color: #f0f2f6;
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
+        margin-bottom: 10px;
+    }
+    .grade-a { color: #00cc00; font-weight: bold; }
+    .grade-d { color: #ff3333; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
-def show_device_dashboard(role_name):
-    st.title(f"⌚ Wearable Refurb Console ({role_name})")
+def show_dashboard():
+    st.title("⌚ RefurbOS: Wearable Operations")
     
-    # DB Load
-    try: devices = list_devices()
-    except: st.error("DB Connection Error. Run seed_smartwatch.py first."); st.stop()
-    
-    if not devices: st.warning("No devices found."); st.stop()
-    
-    # Sidebar Selection
-    dev_map = {d["device_id"]: d for d in devices}
-    sel_id = st.sidebar.selectbox("Select Unit ID", list(dev_map.keys()))
-    payload = get_device_payload(sel_id)
-    
-    brand = payload.get("brand", "Generic")
-    model = payload.get("model", "Watch")
-    specs = payload.get("specs", {})
-    r2 = payload.get("r2v3_flags", {})
-    tel = payload.get("telemetry", {})
+    # 1. LOAD DATA
+    try: 
+        devices = list_devices()
+        if not devices: 
+            st.error("Database Empty. Run seed_smartwatch.py")
+            return
+    except Exception as e:
+        st.error(f"Connection Failed: {e}")
+        return
 
-    # Header Stats
+    # 2. SIDEBAR SELECTOR
+    dev_map = {d['device_id']: d for d in devices}
+    sel_id = st.sidebar.selectbox("Select Unit", list(dev_map.keys()))
+    data = get_device_payload(sel_id)
+    
+    # Unpack for easy access
+    specs = data.get('specs', {})
+    cond = data.get('condition', {})
+    tel = data.get('telemetry', {})
+    
+    # 3. HEADER METRICS (No N/A allowed)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Model", f"{brand} {model}")
-    c2.metric("Case Size", f"{specs.get('case_size_mm', 'N/A')} mm")
-    c3.metric("Battery Health", f"{r2.get('battery_health_percent', 0)}%")
-    c4.metric("Cosmetic Grade", r2.get("cosmetic_grade", "N/A"))
+    c1.metric("Model", f"{data.get('brand')} {data.get('model')}")
+    c2.metric("Size", specs.get('case_size', 'Unknown'))
+    c3.metric("Battery", f"{cond.get('battery_health', 0)}%")
+    
+    grade = cond.get('grade', 'Unknown')
+    color = "grade-a" if "Grade A" in grade else "grade-d"
+    c4.markdown(f"<div class='metric-box'><span class='{color}'>{grade}</span></div>", unsafe_allow_html=True)
 
-    # Tabs
-    tabs = st.tabs(["🔍 Inspection", "⚖️ Tribunal", "💓 Sensor Health", "📝 Audit Log"])
-
-    # TAB 1: INSPECTION DATA
-    with tabs[0]:
+    # 4. TABS
+    t1, t2, t3 = st.tabs(["🔍 Deep Dive", "🤖 AI Tribunal", "📜 Chain of Custody"])
+    
+    # TAB 1: VISUAL INSPECTION
+    with t1:
         c1, c2 = st.columns(2)
-        with c1: 
-            st.subheader("Physical Condition")
-            render_clean(r2)
-        with c2: 
-            st.subheader("Internal Telemetry")
-            render_clean(tel)
+        with c1:
+            st.caption("PHYSICAL STATUS")
+            st.write(f"**Band:** {specs.get('band', 'Standard')}")
+            st.write(f"**Material:** {specs.get('material', 'Standard')}")
+            st.write(f"**Scratches:** {cond.get('scratches', 'None')}")
+        with c2:
+            st.caption("SENSOR TELEMETRY")
+            st.write(f"**Oxidation:** {tel.get('sensor_oxidation', 'Clean')}")
+            st.write(f"**Haptics:** {tel.get('haptic_response', 'Normal')}")
+            
+            # Simulated Chart
+            st.line_chart([10, 12, 10, 11, 40, 10, 12] if tel.get('haptic_response') == "Weak" else [10, 10, 11, 10, 10, 11, 10])
 
-    # TAB 2: AI TRIBUNAL (UPDATED PROMPTS)
-    with tabs[1]:
-        st.subheader("Refurbishment Viability Tribunal")
-        if st.button("🚀 Convene Tribunal"):
-            llm = LLMClient("gemini") # Or openai
+    # TAB 2: TRIBUNAL (Live AI)
+    with t2:
+        if st.button("Start Evaluation"):
+            llm = LLMClient("openai") # or gemini
             rid = f"RUN-{pd.Timestamp.now().strftime('%H%M%S')}"
             persist_run(rid, sel_id)
             
-            # --- PROSECUTOR (RISK) ---
-            with st.chat_message("user", avatar="🛑"):
-                st.write("**Agent: Risk Auditor**")
-                p1 = (f"You are a strict QA Auditor for Smartwatches. Analyzing {brand} {model}. "
-                      f"Defects noted: {r2.get('primary_defect')}. Telemetry: {tel}. "
-                      "Highlight risks regarding sweat corrosion, sensor accuracy, and waterproofing. Be aggressive.")
-                r1 = llm.complete(p1)
-                st.write(r1)
-                persist_audit_log(rid, "RISK_AUDIT", {"text": r1})
+            p1 = f"Review {data}. concise risk assessment."
+            r1 = llm.complete(p1)
+            st.info(f"RISK ASSESSMENT: {r1}")
+            persist_audit_log(rid, "AI_RISK_ASSESSMENT", {"summary": r1[:100] + "..."})
 
-            # --- DEFENDER (VALUE) ---
-            with st.chat_message("assistant", avatar="🛡️"):
-                st.write("**Agent: Value Recovery**")
-                p2 = (f"Act as Refurb Engineer. Defend this {brand} {model}. "
-                      f"Counter-argue the risks: {r1}. Focus on the value of the {specs.get('housing_material')} case "
-                      "and modularity of the screen/battery. Argue for repair over recycling.")
-                r2 = llm.complete(p2)
-                st.write(r2)
-                persist_audit_log(rid, "VALUE_DEFENSE", {"text": r2})
+            p2 = f"Review {r1}. Estimated Resale Value?"
+            r2 = llm.complete(p2)
+            st.success(f"VALUATION: {r2}")
+            persist_audit_log(rid, "AI_VALUATION", {"value_prediction": r2})
 
-            # --- ARBITER (VERDICT) ---
-            with st.chat_message("assistant", avatar="⚖️"):
-                st.write("**The Arbiter**")
-                p3 = (f"Act as Final Arbiter. Review arguments. Risk: {r1}. Value: {r2}. "
-                      "Decide fate: 'Resell as Grade B', 'Refurbish (New Screen)', or 'Harvest for Parts'. "
-                      "Provide a final dollar valuation estimate.")
-                r3 = llm.complete(p3)
-                st.markdown(f"### VERDICT\n{r3}")
-                persist_audit_log(rid, "FINAL_VERDICT", {"text": r3})
-                st.session_state['last_run'] = rid
-
-    # TAB 3: SENSOR FFT
-    with tabs[2]:
-        st.subheader("Heart Rate / Taptic Engine Signal")
-        samples = payload.get("fft_samples", [])
-        if samples:
-            st.line_chart(samples)
-            if st.button("Analyze Signal Noise"):
-                llm = LLMClient("gemini")
-                prompt = (f"Act as a Signal Processing Engineer. Analyze this variance data for a {brand} smartwatch. "
-                          "Is this sensor drift indicative of moisture damage or normal operation?")
-                st.info(llm.complete(prompt))
-
-    # TAB 4: LOGS
-    with tabs[3]:
+    # TAB 3: AUDIT LOG (Clean Table, No Chat)
+    with t3:
         runs = fetch_runs_for_device(sel_id)
         if not runs.empty:
-            rid = st.selectbox("Select Audit Run", runs['run_id'])
-            chain = fetch_audit_chain(rid)
-            for _, row in chain.iterrows():
-                with st.expander(f"{row['event_type']} @ {row['created_at']}"):
-                    st.write(row['payload_json'])
+            all_logs = []
+            for rid in runs['run_id']:
+                chain = fetch_audit_chain(rid)
+                for _, row in chain.iterrows():
+                    # Clean up the JSON for display
+                    details = row['payload_json']
+                    if isinstance(details, str): details = json.loads(details)
+                    
+                    all_logs.append({
+                        "Time": row['created_at'],
+                        "Event": row['event_type'],
+                        "Details": str(details) # simplified string
+                    })
+            
+            if all_logs:
+                st.dataframe(pd.DataFrame(all_logs), use_container_width=True)
+            else:
+                st.info("Device initialized. No events yet.")
 
-role = st.sidebar.selectbox("User Role", ["Technician", "Manager"])
-show_device_dashboard(role)
+if __name__ == "__main__":
+    show_dashboard()
