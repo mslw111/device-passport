@@ -8,7 +8,7 @@ import psycopg2
 import psycopg2.extras
 from scipy import signal
 
-# --- CORRECTED IMPORTS ---
+# --- CORRECTED IMPORTS (Split into separate lines) ---
 from db_access import *
 from db_persist import persist_run, persist_audit_log
 from llm_client import LLMClient
@@ -216,9 +216,6 @@ def show_dashboard():
             fc_len = len(fc)
             
             # Pad data so they align on the chart
-            # History needs 'None' for the future
-            # Forecast needs 'None' for the past
-            
             chart_data = pd.DataFrame({
                 "Historical": batt_hist + [None]*fc_len,
                 "Forecast": [None]*hist_len + list(fc),
