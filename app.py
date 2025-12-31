@@ -42,24 +42,30 @@ class LLMClient:
             return resp.choices[0].message.content
         except Exception as e: return f"Error: {e}"
 
-# --- 2. DB HELPERS (FIXED PERSISTENCE) ---
+# --- 2. DB HELPERS (FORCE-PERSISTENCE FIX) ---
 def get_db_connection():
     url = st.secrets.get("DATABASE_URL")
     return psycopg2.connect(url) if url else None
 
 def record_event(device_id, event_type, narrative):
-    """Writes the AGI output to Neon immediately"""
+    """Saves to both runs and audit_log tables to ensure the JOIN works"""
     conn = get_db_connection()
     if not conn: return
     try:
         with conn.cursor() as cur:
-            rid = f"RUN-{device_id}-{datetime.now().strftime('%H%M%S')}"
-            cur.execute("INSERT INTO runs (run_id, device_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (rid, device_id))
+            # 1. Generate a unique Run ID
+            rid = f"R-{device_id}-{datetime.now().strftime('%m%d-%H%M%S')}"
+            # 2. Insert into runs (The Parent)
+            cur.execute("INSERT INTO runs (run_id, device_id) VALUES (%s, %s)", (rid, device_id))
+            # 3. Insert into audit_log (The Child)
             cur.execute("INSERT INTO audit_log (run_id, event_type, payload_json) VALUES (%s, %s, %s)", 
                         (rid, event_type, json.dumps({"narrative": narrative})))
         conn.commit()
-    except Exception as e: st.error(f"Save Error: {e}")
-    finally: conn.close()
+        st.toast(f"✅ Immutable Log Recorded: {event_type}")
+    except Exception as e: 
+        st.error(f"Persistence Failure: {e}")
+    finally: 
+        conn.close()
 
 # --- 3. MATH ---
 def analyze_spectrum(samples):
@@ -83,6 +89,7 @@ def show_dashboard():
 
     if not rows: st.warning("Database Empty."); return
 
+    # Better Labeling for Pull-down
     dev_map = {f"{r['brand']} {r['model_number']} ({r['device_id']})": r for r in rows}
     sel_label = st.sidebar.selectbox("⌚ SELECT ASSET", sorted(list(dev_map.keys())))
     
@@ -100,7 +107,7 @@ def show_dashboard():
     tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Event Ledger"])
 
     with tabs[0]:
-        st.subheader("Haptic Forensic")
+        st.subheader("Haptic Signal Analysis")
         sig = payload.get('telemetry', {}).get('haptic_signal', [])
         res = analyze_spectrum(sig)
         st.line_chart(sig)
@@ -108,31 +115,34 @@ def show_dashboard():
             llm = LLMClient()
             narrative = llm.complete(f"Forensic Analysis: {selected_row['model_number']}. FFT Peak {res['peak']:.2f}Hz.")
             st.markdown(f'<div class="forensic-report">{narrative}</div>', unsafe_allow_html=True)
-            # THIS SAVES TO THE LEDGER
             record_event(selected_row['device_id'], "SIGNAL_AUDIT", narrative)
 
     with tabs[2]:
-        st.subheader("Tribunal")
+        st.subheader("Tribunal Debate")
         if st.button("⚔️ CONVENE TRIBUNAL"):
             llm = LLMClient()
             crit = llm.complete(f"R2v3 Auditor critique for {selected_row['model_number']}.")
-            st.markdown(f'<div class="forensic-report"><b>AUDITOR:</b> {crit}</div>', unsafe_allow_html=True)
-            # THIS SAVES TO THE LEDGER
-            record_event(selected_row['device_id'], "TRIBUNAL_DEBATE", crit)
+            st.markdown(f'<div class="forensic-report"><b>VERDICT:</b> {crit}</div>', unsafe_allow_html=True)
+            record_event(selected_row['device_id'], "TRIBUNAL_VERDICT", crit)
 
     with tabs[3]:
         st.subheader("📜 Event Ledger")
+        # Direct Query to see if entries exist
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
                 SELECT runs.created_at, audit_log.event_type 
-                FROM runs JOIN audit_log ON runs.run_id = audit_log.run_id 
-                WHERE runs.device_id = %s ORDER BY runs.created_at DESC
+                FROM runs 
+                INNER JOIN audit_log ON runs.run_id = audit_log.run_id 
+                WHERE runs.device_id = %s 
+                ORDER BY runs.created_at DESC
             """, (selected_row['device_id'],))
             history = cur.fetchall()
+            
         if history:
             st.table(pd.DataFrame(history))
         else:
-            st.info("No events recorded for this unit yet. Run an AGI analysis to trigger a log.")
+            st.warning("No audit history found in the Neon tables for this specific unit.")
+            st.info("Try this: Click 'Interpret Signal' then come back here.")
 
 if __name__ == "__main__":
     show_dashboard()
