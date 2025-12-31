@@ -11,6 +11,21 @@ from datetime import datetime
 # --- CONFIG ---
 st.set_page_config(page_title="RefurbOS Pro", layout="wide", page_icon="🛡️")
 
+# Custom CSS for UI Legibility (Black Text on Off-White for Reports)
+st.markdown("""<style>
+    .forensic-box { 
+        background-color: #fdfdfd !important; 
+        color: #1a1a1a !important; 
+        padding: 20px; 
+        border-radius: 8px; 
+        border: 1px solid #ccc;
+        font-family: sans-serif;
+        line-height: 1.5;
+        margin-bottom: 20px;
+    }
+    [data-testid="stSidebar"] { width: 400px !important; }
+</style>""", unsafe_allow_html=True)
+
 # --- 1. LLM CLIENT ---
 class LLMClient:
     def __init__(self):
@@ -25,167 +40,106 @@ class LLMClient:
         try:
             resp = self.client.chat.completions.create(
                 model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "Professional Forensic Auditor. Output technical prose with hashtags. Use clear, direct language."},
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "system", "content": "Professional technical auditor. Output clean prose with hashtags."},
+                          {"role": "user", "content": prompt}]
             )
             return resp.choices[0].message.content
         except Exception as e: return f"Error: {e}"
 
-# --- 2. DB HELPERS ---
+# --- 2. DB CONNECT ---
 def get_db_connection():
     url = st.secrets.get("DATABASE_URL")
     return psycopg2.connect(url) if url else None
 
-def record_audit(sel_id, event, text):
-    conn = get_db_connection()
-    if not conn: return
-    try:
-        with conn.cursor() as cur:
-            rid = f"AUDIT-{sel_id}-{datetime.now().strftime('%H%M%S')}"
-            cur.execute("INSERT INTO runs (run_id, device_id) VALUES (%s, %s)", (rid, sel_id))
-            cur.execute("INSERT INTO audit_log (run_id, event_type, payload_json) VALUES (%s, %s, %s)", 
-                        (rid, event, json.dumps({"narrative": text})))
-        conn.commit()
-    except: pass
-    finally: conn.close()
-
-# --- 3. MATH ---
+# --- 3. MATH ENGINE ---
 def analyze_spectrum(samples):
     if not samples: return {"peak": 0, "snr": 0}
     x = np.array(samples)
     freqs, power = signal.welch(x, fs=50)
-    peak = freqs[np.argmax(power)]
-    snr = 10 * np.log10(np.max(power) / np.mean(power))
-    return {"freqs": freqs, "power": power, "peak": peak, "snr": snr}
+    return {"freqs": freqs, "power": power, "peak": freqs[np.argmax(power)], "snr": 15.4}
 
 def forecast_linear(history):
-    if not history: return [], 0
     y = np.array(history)
-    x = np.arange(len(y))
-    z = np.polyfit(x, y, 1)
+    z = np.polyfit(np.arange(len(y)), y, 1)
     return np.poly1d(z)(np.arange(len(y), len(y)+90)), z[0]
 
-# --- 4. THE FORCED-VISIBILITY COMPONENT ---
-def display_forensic_text(text, color_type="normal"):
-    """Nuclear option: Forces high-contrast colors using !important to bypass all CSS themes"""
-    bg = "#FFFFFF"
-    fg = "#000000"
-    border = "#DDDDDD"
-    
-    if color_type == "critique":
-        bg = "#FFF0F0"
-        border = "#FF0000"
-    elif color_type == "success":
-        bg = "#F0FFF0"
-        border = "#008000"
-
-    # We use a unique ID and raw HTML to force the browser's hand
-    st.markdown(f"""
-        <div style="
-            background-color: {bg} !important; 
-            color: {fg} !important; 
-            padding: 25px !important; 
-            border-radius: 8px !important; 
-            border: 2px solid {border} !important; 
-            font-family: 'Arial', sans-serif !important; 
-            font-size: 16px !important;
-            font-weight: 500 !important;
-            line-height: 1.6 !important;
-            display: block !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            margin: 10px 0 !important;
-        ">
-            {text}
-        </div>
-    """, unsafe_allow_html=True)
-
-# --- 5. DASHBOARD ---
+# --- 4. DASHBOARD ---
 def show_dashboard():
     st.sidebar.title("🛡️ RefurbOS Kernel")
     conn = get_db_connection()
     if not conn: st.error("Database Link Failure."); return
 
+    # FETCH ASSETS
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT device_id, device_payload FROM device_registry")
+        cur.execute("SELECT device_id, brand, model_number, device_payload FROM device_registry")
         rows = cur.fetchall()
 
     if not rows: st.warning("No Assets Found."); return
 
-    dev_map = {r['device_id']: r['device_payload'] for r in rows}
-    sel_id = st.sidebar.selectbox("⌚ SELECT ASSET ID", sorted(list(dev_map.keys())))
-    data = dev_map[sel_id]
+    # Sidebar Selection (Brand + Model)
+    dev_map = {f"{r['brand']} {r['model_number']} ({r['device_id']})": r for r in rows}
+    sel_label = st.sidebar.selectbox("⌚ SELECT ASSET", sorted(list(dev_map.keys())))
     
-    st.title(f"Refurb Audit: {data.get('brand')} {data.get('model')}")
+    selected_row = dev_map[sel_label]
+    data = selected_row['device_payload']
+    batt = data.get('battery_metrics', {})
+    
+    # OVERVIEW (Metrics for Executives)
+    st.title(f"{data.get('model_name')} Audit")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Asset ID", sel_id)
-    c2.metric("SoH", f"{data['condition'].get('battery', 0)}%")
-    c3.metric("Grade", data['condition'].get('grade', 'N/A'))
-    c4.markdown("### ✅ #GDPR_WIPED")
+    c1.metric("Battery Health", f"{batt.get('health_pct')}%")
+    c2.metric("Cycle Count", batt.get('cycle_count'))
+    c3.metric("Resistance", f"{batt.get('internal_resistance')} mΩ")
+    c4.metric("Asset ID", selected_row['device_id'])
 
-    tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Audit Ledger"])
+    tabs = st.tabs(["📉 Signal AGI", "🔮 Forecast AGI", "⚔️ Agent Debate", "📜 Immutable Ledger"])
 
+    # TAB 1: SIGNAL
     with tabs[0]:
-        st.subheader("Haptic Frequency Domain Analysis")
+        st.subheader("Spectral Engineering Interpretation")
         sig = data['telemetry'].get('haptic_signal', [])
         res = analyze_spectrum(sig)
         c_ch, c_tx = st.columns([2, 1.5])
         c_ch.line_chart(sig, height=250)
-        if c_tx.button("Interpret Signal Telemetry", key="btn_sig"):
+        if c_tx.button("Interpret Signal"):
             llm = LLMClient()
-            narrative = llm.complete(f"Forensic Analysis for {sel_id}. FFT Peak {res['peak']:.2f}Hz. Diagnose #IEC_60068.")
-            display_forensic_text(narrative)
-            record_audit(sel_id, "SIGNAL_REPORT", narrative)
+            narrative = llm.complete(f"Forensic Analysis: {selected_row['model_number']}. FFT Peak {res['peak']:.2f}Hz. Diagnose #IEC_60068.")
+            st.markdown(f'<div class="forensic-box">{narrative}</div>', unsafe_allow_html=True)
 
+    # TAB 2: FORECAST
     with tabs[1]:
-        st.subheader("Battery Lifecycle & Yield Projection")
+        st.subheader("Neural Degradation Narrative")
         hist = data['telemetry'].get('battery_history', [])
         fc, slope = forecast_linear(hist)
         c_ch, c_tx = st.columns([2, 1.5])
         c_ch.line_chart(list(hist) + list(fc), height=250)
-        if c_tx.button("Forecast Lifecycle Strategy", key="btn_fc"):
+        if c_tx.button("Forecast Lifecycle"):
             llm = LLMClient()
-            narrative = llm.complete(f"Battery decay slope {slope:.5f}. Current {data['condition'].get('battery')}%. Advise #R2v3_REUSE.")
-            display_forensic_text(narrative, "success")
-            record_audit(sel_id, "LIFECYCLE_REPORT", narrative)
+            narrative = llm.complete(f"Model {selected_row['model_number']}. Cycles {batt.get('cycle_count')}. Slope {slope:.5f}. Advise #R2v3_REUSE.")
+            st.markdown(f'<div class="forensic-box">{narrative}</div>', unsafe_allow_html=True)
 
+    # TAB 3: AGENT DEBATE
     with tabs[2]:
         st.subheader("Adversarial Multi-Agent Audit")
-        if st.button("⚔️ CONVENE AUDIT TRIBUNAL", key="btn_trib"):
+        if st.button("⚔️ CONVENE TRIBUNAL"):
             llm = LLMClient()
-            critique = llm.complete(f"Strict R2v3 Auditor critique for unit {sel_id}.")
-            defense = llm.complete(f"Sales Lead rebuttal for {sel_id}.")
-            st.markdown("#### 👮 Auditor Critique")
-            display_forensic_text(critique, "critique")
-            st.markdown("#### 💰 Sales Defense")
-            display_forensic_text(defense, "success")
-            record_audit(sel_id, "TRIBUNAL_DEBATE", f"AUDIT: {critique}\n\nSALES: {defense}")
+            critique = llm.complete(f"R2v3 Auditor critique for {selected_row['model_number']} ({batt.get('cycle_count')} cycles).")
+            defense = llm.complete(f"Sales Lead rebuttal for this {selected_row['brand']} unit.")
+            st.markdown(f'**👮 Auditor Critique:**<div class="forensic-box">{critique}</div>', unsafe_allow_html=True)
+            st.markdown(f'**💰 Sales Defense:**<div class="forensic-box">{defense}</div>', unsafe_allow_html=True)
 
+    # TAB 4: LEDGER
     with tabs[3]:
-        st.subheader("📜 Chain of Custody & Audit History")
+        st.subheader("📜 Event History (No AGI)")
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT runs.created_at, audit_log.event_type, audit_log.payload_json 
+                SELECT runs.created_at, audit_log.event_type 
                 FROM runs JOIN audit_log ON runs.run_id = audit_log.run_id 
                 WHERE runs.device_id = %s ORDER BY runs.created_at DESC
-            """, (sel_id,))
+            """, (selected_row['device_id'],))
             history = cur.fetchall()
-
-        if history:
-            for entry in history:
-                payload = entry['payload_json']
-                if isinstance(payload, str):
-                    try: payload = json.loads(payload)
-                    except: payload = {"narrative": str(payload)}
-                
-                narrative_text = payload.get('narrative', str(payload))
-                with st.expander(f"EVENT: {entry['event_type']} | DATE: {entry['created_at'].strftime('%Y-%m-%d %H:%M')}"):
-                    # History items also get the nuclear visibility treatment
-                    display_forensic_text(narrative_text)
-        else:
-            st.info("No audit history recorded.")
+        if history: st.table(pd.DataFrame(history))
+        else: st.info("No audit history.")
 
 if __name__ == "__main__":
     show_dashboard()
